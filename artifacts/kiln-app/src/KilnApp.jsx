@@ -22,19 +22,9 @@ const PROJECTS = [
   { id: 'bramble-maze', name: 'Bramble Maze', type: '2D' },
 ];
 
-// Your Cloudflare Worker — proxies chat prompts to Groq, key stays
-// server-side. CORS on the Worker should already be locked to your
-// game's real domain (not '*') before this ships anywhere public.
-const ROSIE_WORKER_URL = 'https://rosieapi.danielpcini.workers.dev';
-
-// Fallback cap, used only until the Worker has responded at least
-// once. Real remaining/cap/reset values come from the Worker's own
-// response body (creditsRemaining / creditsCap / resetsAt) — see
-// runAssistantResponse and fetchCreditStatus below. The Worker is
-// the source of truth because it's the only thing that actually
-// knows your real API usage; the browser can't track that on its
-// own without something server-side to check against.
-const FALLBACK_CREDIT_CAP = 5;
+// AI requests go through the shared API server so the Groq key stays
+// server-side and is never exposed in the browser.
+const ASSISTANT_API_PATH = '/api/assistant';
 const CONFIG_3D = {
   fov: 75, near: 0.1, far: 1000,
   camPos: { x: 0, y: 50, z: 100 },
@@ -1290,7 +1280,7 @@ function ChatPanel({ project, messages, input, setInput, onSend, isGenerating, c
           <div className="rounded-lg border border-amber-700/40 bg-amber-500/5 p-3 text-center">
             <AlertTriangle size={16} className="text-amber-400 mx-auto mb-1.5" />
             <p className="text-xs text-stone-300 mb-2">
-              You've used your {creditsCap ?? FALLBACK_CREDIT_CAP} free generations.
+              You've used your {creditsCap ?? 'available'} free generations.
               {resetLabel ? ` Resets ${resetLabel}.` : ' Upgrade for more.'}
             </p>
             <button
@@ -1361,19 +1351,11 @@ export default function KilnApp() {
   const [lastBuildError, setLastBuildError] = useState(null);
   const [lastTouchedFile, setLastTouchedFile] = useState(null);
 
-  // Credits are the Worker's numbers, not the browser's. The Worker
-  // is the only thing that actually knows your real Groq/API usage,
-  // so it reports { creditsRemaining, creditsCap, resetsAt } and this
-  // is just a display of that — it rolls over/resets whenever the
-  // Worker says it does, because it's reading the Worker's clock, not
-  // running its own countdown. creditsLoading covers the gap before
-  // the first response comes back, so the UI doesn't show a false
-  // "0 credits" state during that first load.
+  // Groq billing is tied to the user's provider account rather than a
+  // client-side credit counter. Keep these values nullable so the
+  // assistant is never blocked by stale browser state.
   const [creditStatus, setCreditStatus] = useState({ remaining: null, cap: null, resetsAt: null });
   const [creditsLoading, setCreditsLoading] = useState(true);
-  // Keep this null (not 0) whenever the Worker hasn't confirmed a
-  // real number yet — a failed /credits fetch is "unknown", not
-  // "confirmed zero", and should never lock someone out of sending.
   const credits = creditStatus.remaining;
 
   const project = useMemo(() => PROJECTS.find(p => p.id === projectId), [projectId]);
@@ -1386,33 +1368,9 @@ export default function KilnApp() {
   }, [projectId]);
   const projectFiles = filesByProject[projectId];
 
-  // Pulls current credit status from the Worker. Called on mount,
-  // and re-polled periodically so the badge updates on its own once
-  // the Worker's window actually rolls over — the person doesn't
-  // have to send a message first to find out they got refilled.
-  // GET here means this needs a matching GET handler on the Worker
-  // that returns the same { creditsRemaining, creditsCap, resetsAt }
-  // shape as the POST /chat responses do; see the code comment on
-  // ROSIE_WORKER_URL above for what the Worker side needs to send.
+  // There is no client-side credit counter for a user-owned Groq key.
   const fetchCreditStatus = useCallback(async () => {
-    try {
-      const response = await fetch(`${ROSIE_WORKER_URL}/credits`);
-      if (!response.ok) throw new Error(`Worker responded with status ${response.status}`);
-      const data = await response.json();
-      if (typeof data.creditsRemaining !== 'number' || typeof data.creditsCap !== 'number') {
-        throw new Error('Worker /credits response is missing creditsRemaining/creditsCap');
-      }
-      setCreditStatus({ remaining: data.creditsRemaining, cap: data.creditsCap, resetsAt: data.resetsAt ?? null });
-    } catch (err) {
-      // A failed credit check shouldn't silently pretend credits are
-      // fine — but it also shouldn't block the whole app. Leave
-      // whatever the last known values were (or null on first load)
-      // and let the next generation attempt surface a real error if
-      // the Worker is actually down.
-      console.warn('Could not fetch credit status from Worker:', err.message);
-    } finally {
-      setCreditsLoading(false);
-    }
+    setCreditsLoading(false);
   }, []);
 
   useEffect(() => {
@@ -1497,25 +1455,17 @@ export default function KilnApp() {
 
       const contextPrompt = `You are Ember, an AI game-building assistant working on a ${currentProject.type} game project called "${currentProject.name}". Its files are: ${currentFiles.files.join(', ')}. The user asked: ${userPrompt}. ${editsMade.length > 0 ? `You already edited: ${editsMade.join(', ')}.` : 'No local edit rule matched this request.'} Reply with a short (1-2 sentence) summary of what changed, written as if you just did it.`;
 
-      const response = await fetch(ROSIE_WORKER_URL, {
+      const response = await fetch(ASSISTANT_API_PATH, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ prompt: contextPrompt, temperature: 0.7, maxTokens: 200 }),
       });
 
-      if (!response.ok) throw new Error(`Build service responded with status ${response.status}`);
-      const data = await response.json();
-      if (data.error) throw new Error(data.error);
-
-      // The Worker's response is the real source of truth for
-      // credits — if it includes updated numbers, that replaces
-      // creditStatus outright rather than the client incrementing
-      // its own counter. This is what makes the badge track your
-      // actual API usage (and its real reset time) instead of a
-      // fake local countdown.
-      if (typeof data.creditsRemaining === 'number' && typeof data.creditsCap === 'number') {
-        setCreditStatus({ remaining: data.creditsRemaining, cap: data.creditsCap, resetsAt: data.resetsAt ?? null });
+      if (!response.ok) {
+        const errorBody = await response.json().catch(() => ({}));
+        throw new Error(errorBody.error || `Build service responded with status ${response.status}`);
       }
+      const data = await response.json();
 
       bump('Ran a syntax check on the edited file(s)');
       await pace();
@@ -1633,7 +1583,7 @@ export default function KilnApp() {
             title={creditStatus.resetsAt ? `Resets ${formatResetTime(creditStatus.resetsAt)}` : undefined}
           >
             <Zap size={12} className="text-amber-400" />
-            {credits === null ? '…' : `${credits}/${creditStatus.cap ?? FALLBACK_CREDIT_CAP}`} credits
+            {credits === null ? 'Groq AI' : `${credits}/${creditStatus.cap ?? 'available'} credits`}
           </div>
           <button className="hidden sm:flex text-sm px-3 py-1.5 rounded-md border border-stone-700 text-stone-300 hover:bg-stone-800 items-center gap-1.5">
             <Share2 size={14} /> Share
