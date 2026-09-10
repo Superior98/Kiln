@@ -1,0 +1,28 @@
+kind = "web"
+previewPath = "/"
+title = "Kiln"
+description = "A browser-based creative coding workspace for managing projects, previewing 2D and 3D scenes, editing code, and using an AI assistant to iterate on game ideas."
+version = "1.0.0"
+id = "artifacts/kiln-app"
+router = "path"
+
+[[services]]
+name = "web"
+paths = [ "/" ]
+localPort = 18836
+
+[services.development]
+run = "pnpm --filter @workspace/kiln-app run dev"
+
+[services.production]
+build = [ "pnpm", "--filter", "@workspace/kiln-app", "run", "build" ]
+serve = "static"
+publicDir = "artifacts/kiln-app/dist/public"
+
+[[services.production.rewrites]]
+from = "/*"
+to = "/index.html"
+
+[services.env]
+PORT = "18836"
+BASE_PATH = "/"
