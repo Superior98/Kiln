@@ -849,6 +849,19 @@ function Preview2D({ isPlaying, gameSpec }) {
     ro.observe(canvas);
 
     const onKeyDown = (event) => {
+      // Only handle keys for gameplay when the player isn't typing
+      // somewhere else on the page (e.g. the Ember prompt box). Without
+      // this check, this global window listener swallows every space
+      // and arrow key press anywhere in the app, including inside text
+      // inputs — which is exactly what made the prompt box unable to
+      // type spaces.
+      const target = event.target;
+      const isTypingTarget =
+        target &&
+        (target.tagName === 'INPUT' ||
+          target.tagName === 'TEXTAREA' ||
+          target.isContentEditable);
+      if (isTypingTarget) return;
       keys.add(event.key.toLowerCase());
       if (['arrowup', 'arrowdown', 'arrowleft', 'arrowright', ' '].includes(event.key.toLowerCase())) {
         event.preventDefault();
