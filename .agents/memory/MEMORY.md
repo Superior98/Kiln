@@ -1,1 +1,2 @@
 - [Groq assistant compatibility](groq-assistant-compatibility.md) — discover models per key and normalize both content and reasoning response fields.
+- [Ember code-generation rearchitecture](ember-code-generation-rearchitecture.md) — phased plan for letting Ember write real code instead of filling a fixed JSON schema; phase 1 (sandboxed execution harness) is done.
