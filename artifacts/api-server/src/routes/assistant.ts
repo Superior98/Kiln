@@ -106,6 +106,7 @@ router.post("/assistant", async (req, res) => {
         message?: {
           content?: string | Array<{ type?: string; text?: string }> | null;
           reasoning_content?: string | null;
+          reasoning?: string | null;
         };
       }>;
     };
@@ -128,17 +129,8 @@ router.post("/assistant", async (req, res) => {
               .map((part) => part.text ?? "")
               .join("")
               .trim()
-          : message?.reasoning_content?.trim();
+          : (message?.reasoning_content ?? message?.reasoning)?.trim();
     if (!reply) {
-      req.log.warn(
-        {
-          model,
-          choiceCount: data.choices?.length ?? 0,
-          choiceKeys: Object.keys(data.choices?.[0] ?? {}),
-          messageKeys: Object.keys(message ?? {}),
-        },
-        "Groq returned no text",
-      );
       res.status(502).json({ error: `Groq returned no text for model ${model}.` });
       return;
     }

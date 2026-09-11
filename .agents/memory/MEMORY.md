@@ -1,0 +1,1 @@
+- [Groq assistant compatibility](groq-assistant-compatibility.md) — discover models per key and normalize both content and reasoning response fields.

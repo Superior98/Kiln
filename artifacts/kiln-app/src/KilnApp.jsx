@@ -1502,18 +1502,14 @@ export default function KilnApp() {
     ));
     if (touchedFile) setLastTouchedFile(touchedFile);
     setIsGenerating(false);
-    // No client-side increment here — credits already came from the
-    // Worker's response above (or, if that response didn't include
-    // credit fields, a background poll picks up the real number on
-    // its next tick via fetchCreditStatus).
+    // No client-side quota changes here — Groq usage belongs to the
+    // provider account configured on the server.
   }, [filesByProject]);
 
   const handleSend = useCallback((text) => {
     const trimmed = (text ?? input).trim();
-    // While the first credit check is still in flight we don't yet
-    // know the real number, so don't block the send on a `credits`
-    // value that's still just the "haven't heard back yet" default —
-    // only block once the Worker has actually told us we're at 0.
+    // A user-owned Groq key has no client-side quota to enforce, so
+    // only block while a request is already running.
     if (!trimmed || isGenerating || (credits !== null && credits <= 0)) return;
     setMessages(prev => [...prev, { id: `u-${Date.now()}`, role: 'user', text: trimmed }]);
     setInput('');
