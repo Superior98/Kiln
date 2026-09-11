@@ -57,7 +57,113 @@ type AssistantRequest = {
   prompt?: unknown;
   temperature?: unknown;
   maxTokens?: unknown;
+  mode?: unknown;
+  project?: {
+    name?: unknown;
+    type?: unknown;
+  };
+  currentGame?: unknown;
+  files?: unknown;
 };
+
+type GroqUsage = {
+  prompt_tokens?: number;
+  completion_tokens?: number;
+  total_tokens?: number;
+};
+
+const GAME_KINDS = new Set(["platformer", "topdown", "shooter", "runner", "explorer"]);
+
+function colorOr(value: unknown, fallback: string) {
+  return typeof value === "string" && /^#[0-9a-f]{3,8}$/i.test(value) ? value : fallback;
+}
+
+function numberOr(value: unknown, fallback: number, min = -10000, max = 10000) {
+  return typeof value === "number" && Number.isFinite(value)
+    ? Math.min(Math.max(value, min), max)
+    : fallback;
+}
+
+function normalizeGameSpec(value: unknown, fallbackTitle: string) {
+  if (!value || typeof value !== "object") return null;
+  const input = value as Record<string, unknown>;
+  const playerInput =
+    input.player && typeof input.player === "object"
+      ? (input.player as Record<string, unknown>)
+      : {};
+  const normalizeItems = (items: unknown, defaults: Record<string, unknown>[]) =>
+    Array.isArray(items)
+      ? items.slice(0, 40).flatMap((item) => {
+          if (!item || typeof item !== "object") return [];
+          const source = item as Record<string, unknown>;
+          return [{
+            x: numberOr(source.x, 0, -2000, 2000),
+            y: numberOr(source.y, 0, -2000, 2000),
+            w: numberOr(source.w, defaults[0]?.w as number ?? 48, 4, 600),
+            h: numberOr(source.h, defaults[0]?.h as number ?? 20, 4, 600),
+            size: numberOr(source.size, defaults[0]?.size as number ?? 14, 3, 100),
+            color: colorOr(source.color, defaults[0]?.color as string ?? "#f59e0b"),
+            speed: numberOr(source.speed, defaults[0]?.speed as number ?? 0, -20, 20),
+          }];
+        })
+      : defaults;
+
+  return {
+    title: typeof input.title === "string" && input.title.trim()
+      ? input.title.trim().slice(0, 80)
+      : fallbackTitle,
+    kind: typeof input.kind === "string" && GAME_KINDS.has(input.kind)
+      ? input.kind
+      : "platformer",
+    background: colorOr(input.background, "#0c0a09"),
+    accent: colorOr(input.accent, "#f59e0b"),
+    instructions: typeof input.instructions === "string"
+      ? input.instructions.trim().slice(0, 180)
+      : "Arrow keys or A/D to move. Space to jump.",
+    player: {
+      x: numberOr(playerInput.x, 120, 0, 960),
+      y: numberOr(playerInput.y, 360, 0, 540),
+      w: numberOr(playerInput.w, 28, 8, 100),
+      h: numberOr(playerInput.h, 40, 8, 100),
+      color: colorOr(playerInput.color, "#f59e0b"),
+      speed: numberOr(playerInput.speed, 260, 20, 800),
+      jump: numberOr(playerInput.jump, 480, 50, 1000),
+    },
+    platforms: normalizeItems(input.platforms, [
+      { x: 0, y: 470, w: 960, h: 70, color: "#292524" },
+      { x: 270, y: 365, w: 180, h: 22, color: "#57534e" },
+      { x: 600, y: 285, w: 180, h: 22, color: "#57534e" },
+    ]),
+    enemies: normalizeItems(input.enemies, [
+      { x: 520, y: 430, size: 18, color: "#ef4444", speed: 45 },
+    ]),
+    collectibles: normalizeItems(input.collectibles, [
+      { x: 350, y: 325, size: 12, color: "#38bdf8" },
+      { x: 680, y: 245, size: 12, color: "#38bdf8" },
+    ]),
+  };
+}
+
+function parseBuildReply(reply: string, fallbackTitle: string) {
+  const withoutFence = reply
+    .replace(/^```(?:json)?\s*/i, "")
+    .replace(/\s*```$/i, "")
+    .trim();
+  const start = withoutFence.indexOf("{");
+  const end = withoutFence.lastIndexOf("}");
+  if (start < 0 || end <= start) return null;
+  try {
+    const parsed = JSON.parse(withoutFence.slice(start, end + 1)) as Record<string, unknown>;
+    const game = normalizeGameSpec(parsed.game ?? parsed, fallbackTitle);
+    if (!game) return null;
+    return {
+      summary: typeof parsed.summary === "string" ? parsed.summary.trim().slice(0, 500) : "",
+      game,
+    };
+  } catch {
+    return null;
+  }
+}
 
 router.post("/assistant", async (req, res) => {
   const body = req.body as AssistantRequest;
@@ -82,10 +188,30 @@ router.post("/assistant", async (req, res) => {
   const maxTokens =
     typeof body.maxTokens === "number"
       ? Math.min(Math.max(Math.floor(body.maxTokens), 1), 8192)
-      : 200;
+      : body.mode === "build" ? 3000 : 200;
 
   try {
     const model = await resolveGroqModel(apiKey);
+    const isBuild = body.mode === "build";
+    const projectName =
+      typeof body.project?.name === "string" ? body.project.name : "Untitled Game";
+    const projectType =
+      body.project?.type === "3D" ? "3D" : "2D";
+    const prompt = isBuild
+      ? [
+          "You are Ember, a game-building assistant.",
+          `Create or update the playable ${projectType} game "${projectName}" from the user's request.`,
+          "Return ONLY valid JSON with this exact shape: {\"summary\":\"short explanation\",\"game\":{...}}.",
+          "The game object must contain: title, kind, background, accent, instructions, player, platforms, enemies, collectibles.",
+          "Allowed kind values: platformer, topdown, shooter, runner, explorer.",
+          "Use a 960x540 world. Coordinates are pixels with y increasing downward.",
+          "Make a complete playable scene, not a plan. Keep arrays concise (no more than 12 platforms, 10 enemies, 12 collectibles).",
+          "Preserve the existing game idea when the user asks for an edit, and change only what the request calls for.",
+          `Current game definition: ${JSON.stringify(body.currentGame ?? {})}`,
+          `Current project files: ${Array.isArray(body.files) ? body.files.join(", ") : "game.json"}`,
+          `User request: ${body.prompt.trim()}`,
+        ].join("\n")
+      : body.prompt.trim();
     const upstream = await fetch(GROQ_ENDPOINT, {
       method: "POST",
       headers: {
@@ -94,7 +220,7 @@ router.post("/assistant", async (req, res) => {
       },
       body: JSON.stringify({
         model,
-        messages: [{ role: "user", content: body.prompt.trim() }],
+        messages: [{ role: "user", content: prompt }],
         temperature,
         max_tokens: maxTokens,
       }),
@@ -109,6 +235,7 @@ router.post("/assistant", async (req, res) => {
           reasoning?: string | null;
         };
       }>;
+      usage?: GroqUsage;
     };
 
     if (!upstream.ok) {
@@ -135,7 +262,30 @@ router.post("/assistant", async (req, res) => {
       return;
     }
 
-    res.json({ reply, model });
+    if (isBuild) {
+      const build = parseBuildReply(reply, projectName);
+      if (!build) {
+        res.status(502).json({
+          error: "Ember returned an invalid game definition. Try the request again.",
+          model,
+        });
+        return;
+      }
+      res.json({
+        reply: build.summary || `Built ${build.game.title}.`,
+        summary: build.summary || `Built ${build.game.title}.`,
+        game: build.game,
+        files: [{
+          path: "game.json",
+          content: JSON.stringify(build.game, null, 2),
+        }],
+        model,
+        usage: data.usage ?? null,
+      });
+      return;
+    }
+
+    res.json({ reply, model, usage: data.usage ?? null });
   } catch (error) {
     req.log.error({ err: error }, "Groq assistant request failed");
     res.status(502).json({ error: "Unable to reach Groq right now." });

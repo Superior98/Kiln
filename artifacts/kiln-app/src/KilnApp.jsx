@@ -37,7 +37,7 @@ const CONFIG_3D = {
 
 const PROJECT_FILES = {
   'ember-runner': {
-    files: ['engine.js', 'player.js', 'level.js', 'config.js', 'README.md'],
+    files: ['engine.js', 'player.js', 'level.js', 'config.js', 'README.md', 'game.json'],
     contents: {
       'engine.js':
 `import { World } from 'physics';
@@ -99,7 +99,26 @@ export const TARGET_FPS = 60;`,
 
 Generated with Kiln. Ask Ember to add features,
 swap art, or tune the physics and it edits these
-files directly.`
+files directly.`,
+      'game.json':
+`{
+  "title": "Ember Runner",
+  "kind": "platformer",
+  "background": "#0c0a09",
+  "accent": "#f59e0b",
+  "instructions": "Arrow keys or A/D to move. Space to jump.",
+  "player": { "x": 120, "y": 390, "w": 28, "h": 40, "color": "#f59e0b", "speed": 260, "jump": 480 },
+  "platforms": [
+    { "x": 0, "y": 470, "w": 960, "h": 70, "color": "#292524" },
+    { "x": 270, "y": 365, "w": 180, "h": 22, "color": "#57534e" },
+    { "x": 600, "y": 285, "w": 180, "h": 22, "color": "#57534e" }
+  ],
+  "enemies": [{ "x": 520, "y": 430, "size": 18, "color": "#ef4444", "speed": 45 }],
+  "collectibles": [
+    { "x": 350, "y": 325, "size": 12, "color": "#38bdf8" },
+    { "x": 680, "y": 245, "size": 12, "color": "#38bdf8" }
+  ]
+}`
     }
   },
 
@@ -267,11 +286,28 @@ tab renders an actual three.js scene from those values.
 Heads up before shipping: config.assets.js currently
 points at play.rosebud.ai URLs. Swap those for assets
 you host yourself before this leaves the prototype stage.`
+      ,
+      'game.json':
+`{
+  "title": "Skyward Drift",
+  "kind": "explorer",
+  "background": "#87ceeb",
+  "accent": "#2f5d3a",
+  "instructions": "Use the arrow keys to steer the explorer.",
+  "player": { "x": 120, "y": 340, "w": 28, "h": 40, "color": "#f59e0b", "speed": 260, "jump": 480 },
+  "platforms": [],
+  "enemies": [],
+  "collectibles": [
+    { "x": 420, "y": 260, "size": 14, "color": "#38bdf8" },
+    { "x": 620, "y": 220, "size": 14, "color": "#38bdf8" },
+    { "x": 780, "y": 310, "size": 14, "color": "#38bdf8" }
+  ]
+}`
     }
   },
 
   'bramble-maze': {
-    files: ['maze.js', 'player.js', 'config.js', 'README.md'],
+    files: ['maze.js', 'player.js', 'config.js', 'README.md', 'game.json'],
     contents: {
       'maze.js':
 `// Generates a random maze using recursive backtracking.
@@ -321,10 +357,61 @@ export const TORCH_FLICKER_SPEED = 0.08;`,
 
 Generated with Kiln. A torch-lit top-down maze —
 ask Ember to resize the maze, add keys and doors,
-or change the torch color.`
+or change the torch color.`,
+      'game.json':
+`{
+  "title": "Bramble Maze",
+  "kind": "topdown",
+  "background": "#111827",
+  "accent": "#a3e635",
+  "instructions": "Use the arrow keys or WASD to explore the maze.",
+  "player": { "x": 90, "y": 90, "w": 24, "h": 24, "color": "#a3e635", "speed": 220, "jump": 0 },
+  "platforms": [
+    { "x": 0, "y": 0, "w": 960, "h": 24, "color": "#365314" },
+    { "x": 0, "y": 516, "w": 960, "h": 24, "color": "#365314" },
+    { "x": 0, "y": 0, "w": 24, "h": 540, "color": "#365314" },
+    { "x": 936, "y": 0, "w": 24, "h": 540, "color": "#365314" },
+    { "x": 220, "y": 24, "w": 24, "h": 300, "color": "#4d7c0f" },
+    { "x": 480, "y": 215, "w": 24, "h": 301, "color": "#4d7c0f" },
+    { "x": 720, "y": 24, "w": 24, "h": 300, "color": "#4d7c0f" }
+  ],
+  "enemies": [{ "x": 740, "y": 420, "size": 16, "color": "#ef4444", "speed": 32 }],
+  "collectibles": [
+    { "x": 160, "y": 420, "size": 10, "color": "#facc15" },
+    { "x": 360, "y": 120, "size": 10, "color": "#facc15" },
+    { "x": 840, "y": 420, "size": 10, "color": "#facc15" }
+  ]
+}`
     }
   }
 };
+
+function loadProjectFiles() {
+  const defaults = JSON.parse(JSON.stringify(PROJECT_FILES));
+  try {
+    const saved = JSON.parse(window.localStorage.getItem('kiln-project-files-v1') || 'null');
+    if (!saved || typeof saved !== 'object') return defaults;
+    return Object.fromEntries(Object.entries(defaults).map(([id, base]) => {
+      const existing = saved[id];
+      if (!existing || typeof existing !== 'object') return [id, base];
+      const files = Array.from(new Set([
+        ...(Array.isArray(existing.files) ? existing.files : []),
+        ...base.files,
+      ]));
+      return [
+        id,
+        {
+          ...base,
+          ...existing,
+          files,
+          contents: { ...base.contents, ...(existing.contents || {}) },
+        },
+      ];
+    }));
+  } catch {
+    return defaults;
+  }
+}
 
 // Real per-project asset lists. Each project starts empty — no
 // placeholder gradients standing in for art that doesn't exist.
@@ -336,6 +423,35 @@ const PROJECT_ASSETS = {
   'skyward-drift': [],
   'bramble-maze': [],
 };
+
+const FALLBACK_GAME_SPEC = {
+  title: 'Untitled Game',
+  kind: 'platformer',
+  background: '#0c0a09',
+  accent: '#f59e0b',
+  instructions: 'Arrow keys or A/D to move. Space to jump.',
+  player: { x: 120, y: 390, w: 28, h: 40, color: '#f59e0b', speed: 260, jump: 480 },
+  platforms: [{ x: 0, y: 470, w: 960, h: 70, color: '#292524' }],
+  enemies: [],
+  collectibles: [],
+};
+
+function parseGameSpec(projectFiles, fallbackTitle) {
+  try {
+    const parsed = JSON.parse(projectFiles?.contents?.['game.json'] || '');
+    return {
+      ...FALLBACK_GAME_SPEC,
+      ...parsed,
+      title: parsed.title || fallbackTitle,
+      player: { ...FALLBACK_GAME_SPEC.player, ...(parsed.player || {}) },
+      platforms: Array.isArray(parsed.platforms) ? parsed.platforms : FALLBACK_GAME_SPEC.platforms,
+      enemies: Array.isArray(parsed.enemies) ? parsed.enemies : [],
+      collectibles: Array.isArray(parsed.collectibles) ? parsed.collectibles : [],
+    };
+  } catch {
+    return { ...FALLBACK_GAME_SPEC, title: fallbackTitle };
+  }
+}
 
 const STARTER_PROMPTS = {
   '2D': ['A twin-stick space shooter', 'A platformer with double jump', 'An endless runner with coins'],
@@ -596,65 +712,233 @@ function WorkLogCard({ steps, revealCount, done }) {
    2D preview — ambient canvas
 --------------------------------------------------------------- */
 
-function Preview2D({ isPlaying }) {
+function Preview2D({ isPlaying, gameSpec }) {
   const canvasRef = useRef(null);
-  const particlesRef = useRef([]);
+  const playingRef = useRef(isPlaying);
+
+  useEffect(() => { playingRef.current = isPlaying; }, [isPlaying]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
     const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+
+    const world = { width: 960, height: 540 };
+    const keys = new Set();
+    const state = {
+      player: { ...gameSpec.player },
+      velocityX: 0,
+      velocityY: 0,
+      grounded: false,
+      score: 0,
+      collected: new Set(),
+      bullets: [],
+      enemies: gameSpec.enemies.map(enemy => ({ ...enemy })),
+      shootCooldown: 0,
+      time: 0,
+    };
     let raf;
+    let last = performance.now();
 
     const resize = () => {
       const rect = canvas.getBoundingClientRect();
-      canvas.width = rect.width;
-      canvas.height = rect.height;
+      canvas.width = Math.max(1, Math.floor(rect.width * (window.devicePixelRatio || 1)));
+      canvas.height = Math.max(1, Math.floor(rect.height * (window.devicePixelRatio || 1)));
     };
     resize();
     const ro = new ResizeObserver(resize);
     ro.observe(canvas);
 
-    if (particlesRef.current.length === 0) {
-      particlesRef.current = Array.from({ length: 40 }, () => ({
-        x: Math.random(),
-        y: Math.random(),
-        r: Math.random() * 2 + 0.5,
-        speed: Math.random() * 0.0006 + 0.0002,
-        drift: (Math.random() - 0.5) * 0.0004,
-        hue: Math.random() > 0.5 ? '251,191,36' : '251,146,60',
-      }));
-    }
+    const onKeyDown = (event) => {
+      keys.add(event.key.toLowerCase());
+      if (['arrowup', 'arrowdown', 'arrowleft', 'arrowright', ' '].includes(event.key.toLowerCase())) {
+        event.preventDefault();
+      }
+    };
+    const onKeyUp = (event) => keys.delete(event.key.toLowerCase());
+    window.addEventListener('keydown', onKeyDown);
+    window.addEventListener('keyup', onKeyUp);
 
-    const draw = () => {
-      const w = canvas.width, h = canvas.height;
-      ctx.fillStyle = '#0c0a09';
-      ctx.fillRect(0, 0, w, h);
+    const isDown = (...names) => names.some(name => keys.has(name));
+    const overlaps = (a, b) =>
+      a.x < b.x + (b.w ?? b.size * 2) &&
+      a.x + a.w > b.x &&
+      a.y < b.y + (b.h ?? b.size * 2) &&
+      a.y + a.h > b.y;
+    const resetPlayer = () => {
+      state.player = { ...gameSpec.player };
+      state.velocityX = 0;
+      state.velocityY = 0;
+      state.grounded = false;
+    };
 
-      if (isPlaying) {
-        particlesRef.current.forEach(p => {
-          p.y -= p.speed;
-          p.x += p.drift;
-          if (p.y < -0.05) { p.y = 1.05; p.x = Math.random(); }
-        });
+    const update = (dt) => {
+      if (!playingRef.current) return;
+      state.time += dt;
+      const kind = gameSpec.kind;
+      const left = isDown('arrowleft', 'a');
+      const right = isDown('arrowright', 'd');
+      const up = isDown('arrowup', 'w');
+      const down = isDown('arrowdown', 's');
+      const player = state.player;
+
+      if (kind === 'topdown' || kind === 'shooter' || kind === 'explorer') {
+        player.x += ((right ? 1 : 0) - (left ? 1 : 0)) * player.speed * dt;
+        player.y += ((down ? 1 : 0) - (up ? 1 : 0)) * player.speed * dt;
+      } else {
+        state.velocityX = ((right ? 1 : 0) - (left ? 1 : 0)) * player.speed;
+        state.velocityY += 920 * dt;
+        if ((isDown(' ', 'arrowup', 'w') && state.grounded) || (isDown(' ', 'arrowup', 'w') && player.y > world.height)) {
+          state.velocityY = -player.jump;
+          state.grounded = false;
+        }
+        player.x += state.velocityX * dt;
+        const previousBottom = player.y + player.h;
+        player.y += state.velocityY * dt;
+        state.grounded = false;
+        for (const platform of gameSpec.platforms) {
+          const nextBottom = player.y + player.h;
+          if (
+            state.velocityY >= 0 &&
+            previousBottom <= platform.y &&
+            nextBottom >= platform.y &&
+            player.x + player.w > platform.x &&
+            player.x < platform.x + platform.w
+          ) {
+            player.y = platform.y - player.h;
+            state.velocityY = 0;
+            state.grounded = true;
+          }
+        }
       }
 
-      particlesRef.current.forEach(p => {
-        ctx.beginPath();
-        ctx.fillStyle = `rgba(${p.hue},${0.5 + p.r / 4})`;
-        ctx.arc(p.x * w, p.y * h, p.r * 1.6, 0, Math.PI * 2);
-        ctx.fill();
+      player.x = Math.max(0, Math.min(world.width - player.w, player.x));
+      player.y = Math.max(-120, Math.min(world.height - player.h, player.y));
+
+      if (kind === 'shooter') {
+        state.shootCooldown -= dt;
+        if (isDown(' ') && state.shootCooldown <= 0) {
+          state.bullets.push({ x: player.x + player.w, y: player.y + player.h / 2 - 2, w: 16, h: 4 });
+          state.shootCooldown = 0.22;
+        }
+        state.bullets = state.bullets
+          .map(bullet => ({ ...bullet, x: bullet.x + 620 * dt }))
+          .filter(bullet => bullet.x < world.width + 30);
+      }
+
+      state.enemies.forEach((enemy, index) => {
+        if (kind === 'shooter') {
+          enemy.x -= Math.cos(state.time + index) * enemy.speed * dt;
+        } else {
+          enemy.x += Math.sin(state.time * 1.4 + index) * enemy.speed * dt;
+        }
+        if (overlaps(player, { ...enemy, w: enemy.size * 2, h: enemy.size * 2 })) {
+          resetPlayer();
+          state.score = Math.max(0, state.score - 1);
+        }
       });
 
+      state.bullets = state.bullets.filter((bullet) => {
+        const hitIndex = state.enemies.findIndex(enemy =>
+          overlaps(bullet, { ...enemy, w: enemy.size * 2, h: enemy.size * 2 })
+        );
+        if (hitIndex < 0) return true;
+        state.enemies.splice(hitIndex, 1);
+        state.score += 10;
+        return false;
+      });
+
+      gameSpec.collectibles.forEach((item, index) => {
+        if (!state.collected.has(index) && overlaps(player, { ...item, w: item.size * 2, h: item.size * 2 })) {
+          state.collected.add(index);
+          state.score += 5;
+        }
+      });
+    };
+
+    const draw = (now) => {
+      const dt = Math.min((now - last) / 1000, 0.033);
+      last = now;
+      update(dt);
+
+      const scale = Math.min(canvas.width / world.width, canvas.height / world.height);
+      const offsetX = (canvas.width - world.width * scale) / 2;
+      const offsetY = (canvas.height - world.height * scale) / 2;
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      ctx.save();
+      ctx.translate(offsetX, offsetY);
+      ctx.scale(scale, scale);
+      ctx.fillStyle = gameSpec.background;
+      ctx.fillRect(0, 0, world.width, world.height);
+
+      ctx.globalAlpha = 0.12;
+      ctx.strokeStyle = gameSpec.accent;
+      ctx.lineWidth = 1;
+      for (let x = 0; x < world.width; x += 48) {
+        ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, world.height); ctx.stroke();
+      }
+      for (let y = 0; y < world.height; y += 48) {
+        ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(world.width, y); ctx.stroke();
+      }
+      ctx.globalAlpha = 1;
+
+      gameSpec.platforms.forEach(platform => {
+        ctx.fillStyle = platform.color || '#292524';
+        ctx.fillRect(platform.x, platform.y, platform.w, platform.h);
+        ctx.fillStyle = gameSpec.accent;
+        ctx.globalAlpha = 0.35;
+        ctx.fillRect(platform.x, platform.y, platform.w, 3);
+        ctx.globalAlpha = 1;
+      });
+      gameSpec.collectibles.forEach((item, index) => {
+        if (state.collected.has(index)) return;
+        ctx.save();
+        ctx.translate(item.x + item.size, item.y + item.size);
+        ctx.rotate(state.time * 2);
+        ctx.fillStyle = item.color || '#38bdf8';
+        ctx.beginPath();
+        ctx.moveTo(0, -item.size); ctx.lineTo(item.size, 0);
+        ctx.lineTo(0, item.size); ctx.lineTo(-item.size, 0);
+        ctx.closePath(); ctx.fill();
+        ctx.restore();
+      });
+      state.enemies.forEach(enemy => {
+        ctx.fillStyle = enemy.color || '#ef4444';
+        ctx.beginPath();
+        ctx.arc(enemy.x + enemy.size, enemy.y + enemy.size, enemy.size, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = '#1c1917';
+        ctx.fillRect(enemy.x + enemy.size - 7, enemy.y + enemy.size - 3, 4, 4);
+        ctx.fillRect(enemy.x + enemy.size + 3, enemy.y + enemy.size - 3, 4, 4);
+      });
+      ctx.fillStyle = gameSpec.player.color || '#f59e0b';
+      ctx.fillRect(state.player.x, state.player.y, state.player.w, state.player.h);
+      ctx.fillStyle = '#fff7ed';
+      ctx.fillRect(state.player.x + state.player.w * 0.58, state.player.y + 9, 5, 5);
+      ctx.fillStyle = '#fef3c7';
+      state.bullets.forEach(bullet => ctx.fillRect(bullet.x, bullet.y, bullet.w, bullet.h));
+
+      ctx.fillStyle = '#fff7ed';
+      ctx.font = 'bold 16px IBM Plex Mono, monospace';
+      ctx.fillText(gameSpec.title, 22, 30);
+      ctx.font = '13px IBM Plex Mono, monospace';
+      ctx.fillStyle = '#d6d3d1';
+      ctx.fillText(`SCORE ${state.score}`, 22, 52);
+      ctx.fillStyle = '#a8a29e';
+      ctx.fillText(gameSpec.instructions, 22, world.height - 18);
+      ctx.restore();
       raf = requestAnimationFrame(draw);
     };
-    draw();
+    raf = requestAnimationFrame(draw);
 
     return () => {
       cancelAnimationFrame(raf);
       ro.disconnect();
+      window.removeEventListener('keydown', onKeyDown);
+      window.removeEventListener('keyup', onKeyUp);
     };
-  }, [isPlaying]);
+  }, [gameSpec]);
 
   return <canvas ref={canvasRef} className="absolute inset-0 w-full h-full" />;
 }
@@ -665,7 +949,7 @@ function Preview2D({ isPlaying }) {
    the Code tab for Skyward Drift).
 --------------------------------------------------------------- */
 
-function Preview3D({ isPlaying, onError }) {
+function Preview3D({ isPlaying, onError, gameSpec }) {
   const mountRef = useRef(null);
   const playingRef = useRef(isPlaying);
 
@@ -677,8 +961,8 @@ function Preview3D({ isPlaying, onError }) {
 
     const cfg = CONFIG_3D;
     const scene = new THREE.Scene();
-    scene.background = new THREE.Color(cfg.skyColor);
-    scene.fog = new THREE.Fog(cfg.skyColor, 140, 320);
+    scene.background = new THREE.Color(gameSpec.background || cfg.skyColor);
+    scene.fog = new THREE.Fog(gameSpec.background || cfg.skyColor, 140, 320);
 
     const camera = new THREE.PerspectiveCamera(
       cfg.fov,
@@ -711,7 +995,7 @@ function Preview3D({ isPlaying, onError }) {
 
     const ground = new THREE.Mesh(
       new THREE.PlaneGeometry(cfg.terrainSize, cfg.terrainSize, 1, 1),
-      new THREE.MeshStandardMaterial({ color: 0x2f5d3a, roughness: 1 })
+      new THREE.MeshStandardMaterial({ color: gameSpec.accent || 0x2f5d3a, roughness: 1 })
     );
     ground.rotation.x = -Math.PI / 2;
     scene.add(ground);
@@ -719,7 +1003,7 @@ function Preview3D({ isPlaying, onError }) {
     const player = new THREE.Group();
     const body = new THREE.Mesh(
       new THREE.CylinderGeometry(2, 2.4, 5, 16),
-      new THREE.MeshStandardMaterial({ color: 0xf59e0b, roughness: 0.4, metalness: 0.1 })
+      new THREE.MeshStandardMaterial({ color: gameSpec.player.color || 0xf59e0b, roughness: 0.4, metalness: 0.1 })
     );
     body.position.y = 4;
     const head = new THREE.Mesh(
@@ -731,14 +1015,23 @@ function Preview3D({ isPlaying, onError }) {
     scene.add(player);
 
     const gems = [];
-    const gemCount = 6;
+    const gemCount = Math.max(1, gameSpec.collectibles.length || 6);
     for (let i = 0; i < gemCount; i++) {
       const gem = new THREE.Mesh(
         new THREE.OctahedronGeometry(1.4, 0),
-        new THREE.MeshStandardMaterial({ color: 0x38bdf8, emissive: 0x0ea5e9, emissiveIntensity: 0.35 })
+        new THREE.MeshStandardMaterial({
+          color: gameSpec.collectibles[i]?.color || 0x38bdf8,
+          emissive: gameSpec.collectibles[i]?.color || 0x0ea5e9,
+          emissiveIntensity: 0.35,
+        })
       );
       const angle = (i / gemCount) * Math.PI * 2;
-      gem.position.set(Math.cos(angle) * 22, 6 + Math.sin(i) * 2, Math.sin(angle) * 22);
+      const collectible = gameSpec.collectibles[i];
+      gem.position.set(
+        collectible ? (collectible.x - 480) / 12 : Math.cos(angle) * 22,
+        collectible ? Math.max(2, 12 - collectible.y / 80) : 6 + Math.sin(i) * 2,
+        collectible ? (collectible.y - 270) / 12 : Math.sin(angle) * 22,
+      );
       scene.add(gem);
       gems.push(gem);
     }
@@ -783,7 +1076,7 @@ function Preview3D({ isPlaying, onError }) {
       renderer.dispose();
       if (renderer.domElement.parentNode === mount) mount.removeChild(renderer.domElement);
     };
-  }, []);
+  }, [gameSpec, onError]);
 
   return <div ref={mountRef} className="absolute inset-0" />;
 }
@@ -814,7 +1107,7 @@ function UnavailablePreview({ message, onRetry }) {
   );
 }
 
-function PreviewPane({ project, buildError }) {
+function PreviewPane({ project, projectFiles, buildError }) {
   const [isPlaying, setIsPlaying] = useState(true);
   const [device, setDevice] = useState('desktop');
   // Local error state, but it is only ever set by a real failure:
@@ -823,6 +1116,10 @@ function PreviewPane({ project, buildError }) {
   // (e.g. WebGL unavailable). There is no manual toggle for this.
   const [renderError, setRenderError] = useState(null);
   const is3D = project.type === '3D';
+  const gameSpec = useMemo(
+    () => parseGameSpec(projectFiles, project.name),
+    [projectFiles, project.name],
+  );
 
   useEffect(() => { setRenderError(null); }, [project.id]);
 
@@ -830,9 +1127,7 @@ function PreviewPane({ project, buildError }) {
 
   const caption = activeError
     ? `Build error: ${activeError}`
-    : is3D
-    ? 'Ember rebuilds this scene from camera.js, lighting.js, and render.js whenever it edits them.'
-    : 'Ember redraws this preview every time it edits engine.js.';
+    : `Live ${gameSpec.kind} runtime — the preview reads game.json after every applied Ember change.`;
 
   return (
     <div className="flex-1 flex flex-col min-h-0">
@@ -872,9 +1167,9 @@ function PreviewPane({ project, buildError }) {
           {activeError ? (
             <UnavailablePreview message={activeError} onRetry={() => setRenderError(null)} />
           ) : is3D ? (
-            <Preview3D isPlaying={isPlaying} onError={setRenderError} />
+            <Preview3D isPlaying={isPlaying} onError={setRenderError} gameSpec={gameSpec} />
           ) : (
-            <Preview2D isPlaying={isPlaying} />
+            <Preview2D isPlaying={isPlaying} gameSpec={gameSpec} />
           )}
           <div className="absolute top-3 left-3 right-3 flex items-center justify-between">
             <span className="text-[11px] px-2 py-1 rounded-full bg-black/50 text-amber-300 border border-amber-500/20" style={{ fontFamily: "'IBM Plex Mono', monospace" }}>
@@ -1183,11 +1478,10 @@ function CodePane({ project, projectFiles, lastTouchedFile }) {
    Chat panel
 --------------------------------------------------------------- */
 
-function ChatPanel({ project, messages, input, setInput, onSend, isGenerating, credits, creditsCap, resetsAt, creditsLoading, onAddCredits, onClose }) {
+function ChatPanel({ project, messages, input, setInput, onSend, isGenerating, onClose }) {
   const scrollRef = useRef(null);
   const starters = STARTER_PROMPTS[project.type];
 
-  const resetLabel = resetsAt ? formatResetTime(resetsAt) : null;
   useEffect(() => {
     if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
   }, [messages]);
@@ -1276,53 +1570,35 @@ function ChatPanel({ project, messages, input, setInput, onSend, isGenerating, c
       </div>
 
       <div className="border-t border-stone-800 p-3 shrink-0">
-        {credits !== null && credits <= 0 ? (
-          <div className="rounded-lg border border-amber-700/40 bg-amber-500/5 p-3 text-center">
-            <AlertTriangle size={16} className="text-amber-400 mx-auto mb-1.5" />
-            <p className="text-xs text-stone-300 mb-2">
-              You've used your {creditsCap ?? 'available'} free generations.
-              {resetLabel ? ` Resets ${resetLabel}.` : ' Upgrade for more.'}
-            </p>
-            <button
-              onClick={onAddCredits}
-              className="text-xs px-3 py-1.5 rounded-md bg-amber-500 text-stone-950 font-medium hover:bg-amber-400"
-            >
-              Upgrade
-            </button>
+        <div className="flex items-end gap-2 bg-stone-900 border border-stone-800 rounded-xl px-3 py-2 focus-within:border-amber-500/40">
+          <textarea
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            onKeyDown={handleKeyDown}
+            disabled={isGenerating}
+            rows={1}
+            placeholder="Ask Ember… or drag, drop, or paste an image"
+            className="flex-1 bg-transparent text-sm text-stone-200 placeholder-stone-600 resize-none focus:outline-none max-h-24"
+          />
+          <button
+            onClick={() => onSend()}
+            disabled={isGenerating || !input.trim()}
+            className="h-7 w-7 rounded-full bg-amber-500 disabled:bg-stone-700 disabled:text-stone-500 text-stone-950 flex items-center justify-center shrink-0 transition-colors"
+          >
+            <ArrowUp size={14} />
+          </button>
+        </div>
+        <div className="flex items-center justify-between mt-2 px-0.5">
+          <button className="text-[11px] px-2 py-1 rounded-md border border-stone-800 text-stone-500 flex items-center gap-1">
+            ember <ChevronDown size={11} />
+          </button>
+          <div className="flex items-center gap-2.5 text-stone-600">
+            <Paperclip size={14} className="hover:text-stone-300 cursor-pointer transition-colors" />
+            <Camera size={14} className="hover:text-stone-300 cursor-pointer transition-colors" />
+            <Wand2 size={14} className="hover:text-stone-300 cursor-pointer transition-colors" />
+            <History size={14} className="hover:text-stone-300 cursor-pointer transition-colors" />
           </div>
-        ) : (
-          <>
-            <div className="flex items-end gap-2 bg-stone-900 border border-stone-800 rounded-xl px-3 py-2 focus-within:border-amber-500/40">
-              <textarea
-                value={input}
-                onChange={(e) => setInput(e.target.value)}
-                onKeyDown={handleKeyDown}
-                disabled={isGenerating}
-                rows={1}
-                placeholder="Ask Ember… or drag, drop, or paste an image"
-                className="flex-1 bg-transparent text-sm text-stone-200 placeholder-stone-600 resize-none focus:outline-none max-h-24"
-              />
-              <button
-                onClick={() => onSend()}
-                disabled={isGenerating || !input.trim()}
-                className="h-7 w-7 rounded-full bg-amber-500 disabled:bg-stone-700 disabled:text-stone-500 text-stone-950 flex items-center justify-center shrink-0 transition-colors"
-              >
-                <ArrowUp size={14} />
-              </button>
-            </div>
-            <div className="flex items-center justify-between mt-2 px-0.5">
-              <button className="text-[11px] px-2 py-1 rounded-md border border-stone-800 text-stone-500 flex items-center gap-1">
-                ember <ChevronDown size={11} />
-              </button>
-              <div className="flex items-center gap-2.5 text-stone-600">
-                <Paperclip size={14} className="hover:text-stone-300 cursor-pointer transition-colors" />
-                <Camera size={14} className="hover:text-stone-300 cursor-pointer transition-colors" />
-                <Wand2 size={14} className="hover:text-stone-300 cursor-pointer transition-colors" />
-                <History size={14} className="hover:text-stone-300 cursor-pointer transition-colors" />
-              </div>
-            </div>
-          </>
-        )}
+        </div>
       </div>
     </div>
   );
@@ -1341,22 +1617,15 @@ export default function KilnApp() {
   const [projectOpen, setProjectOpen] = useState(false);
   const [projectId, setProjectId] = useState(PROJECTS[0].id);
   const [chatOpenMobile, setChatOpenMobile] = useState(false);
-  // Real per-project file state, seeded from PROJECT_FILES. This is
-  // what the edit engine actually reads and writes — not a static
-  // constant — so a file Ember edits stays edited.
-  const [filesByProject, setFilesByProject] = useState(PROJECT_FILES);
-  // Set only when a real build step throws (worker unreachable, bad
-  // response, edit engine error). Nothing else may set this — there
-  // is no manual "simulate error" control anymore.
+  // Project files are the source of truth for both the Code tab and the
+  // live preview. Keep them in local storage so a build survives reloads.
+  const [filesByProject, setFilesByProject] = useState(loadProjectFiles);
   const [lastBuildError, setLastBuildError] = useState(null);
   const [lastTouchedFile, setLastTouchedFile] = useState(null);
 
-  // Groq billing is tied to the user's provider account rather than a
-  // client-side credit counter. Keep these values nullable so the
-  // assistant is never blocked by stale browser state.
-  const [creditStatus, setCreditStatus] = useState({ remaining: null, cap: null, resetsAt: null });
-  const [creditsLoading, setCreditsLoading] = useState(true);
-  const credits = creditStatus.remaining;
+  useEffect(() => {
+    window.localStorage.setItem('kiln-project-files-v1', JSON.stringify(filesByProject));
+  }, [filesByProject]);
 
   const project = useMemo(() => PROJECTS.find(p => p.id === projectId), [projectId]);
   const assets = assetsByProject[projectId];
@@ -1367,19 +1636,6 @@ export default function KilnApp() {
     }));
   }, [projectId]);
   const projectFiles = filesByProject[projectId];
-
-  // There is no client-side credit counter for a user-owned Groq key.
-  const fetchCreditStatus = useCallback(async () => {
-    setCreditsLoading(false);
-  }, []);
-
-  useEffect(() => {
-    fetchCreditStatus();
-    // Re-check periodically so a reset that happens while the app is
-    // just sitting open still updates the badge without a send.
-    const interval = setInterval(fetchCreditStatus, 60000);
-    return () => clearInterval(interval);
-  }, [fetchCreditStatus]);
 
   // Switching projects clears in-flight chat state so a 2D work log
   // doesn't linger while looking at a 3D project, and vice versa.
@@ -1414,51 +1670,21 @@ export default function KilnApp() {
     try {
       await pace();
 
-      // Find every edit rule whose keyword matches the prompt, and
-      // ask each one to actually apply itself to a file in this
-      // project. Only rules that produced a real match against the
-      // current project's files run — the rest are skipped, and
-      // that's reported too.
-      const applyKey = currentProject.type === '3D' ? 'apply3D' : 'apply2D';
-      const matches = EDIT_RULES.filter(r => r.match.test(userPrompt) && typeof r[applyKey] === 'function');
-
-      let nextContents = { ...currentFiles.contents };
-      let nextFilesList = [...currentFiles.files];
-      const editsMade = [];
-
-      for (const rule of matches) {
-        const result = rule[applyKey](currentFiles.contents, currentProject);
-        if (!result) continue;
-        const { file, code, insertBeforeLastBrace } = result;
-        if (!nextFilesList.includes(file)) {
-          throw new Error(`Ember tried to edit ${file}, but that file doesn't exist in ${currentProject.name}.`);
-        }
-        const existing = nextContents[file] || '';
-        let updated;
-        if (insertBeforeLastBrace) {
-          const lastBrace = existing.lastIndexOf('}');
-          updated = lastBrace === -1 ? existing + code : existing.slice(0, lastBrace) + code + '\n' + existing.slice(lastBrace);
-        } else {
-          updated = existing + code;
-        }
-        nextContents[file] = updated;
-        editsMade.push(file);
-        touchedFile = file;
-      }
-
-      if (editsMade.length > 0) {
-        bump(`Editing ${[...new Set(editsMade)].join(', ')}`);
-      } else {
-        bump('No matching module found for that request — asked the build service for a plan');
-      }
+      bump('Asking Ember to generate a playable game definition');
       await pace();
-
-      const contextPrompt = `You are Ember, an AI game-building assistant working on a ${currentProject.type} game project called "${currentProject.name}". Its files are: ${currentFiles.files.join(', ')}. The user asked: ${userPrompt}. ${editsMade.length > 0 ? `You already edited: ${editsMade.join(', ')}.` : 'No local edit rule matched this request.'} Reply with a short (1-2 sentence) summary of what changed, written as if you just did it.`;
 
       const response = await fetch(ASSISTANT_API_PATH, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ prompt: contextPrompt, temperature: 0.7, maxTokens: 200 }),
+        body: JSON.stringify({
+          mode: 'build',
+          prompt: userPrompt,
+          project: { name: currentProject.name, type: currentProject.type },
+          currentGame: parseGameSpec(currentFiles, currentProject.name),
+          files: currentFiles.files,
+          temperature: 0.45,
+          maxTokens: 3000,
+        }),
       });
 
       if (!response.ok) {
@@ -1467,30 +1693,49 @@ export default function KilnApp() {
       }
       const data = await response.json();
 
-      bump('Ran a syntax check on the edited file(s)');
+      const generatedFiles = Array.isArray(data.files) ? data.files : [];
+      if (!generatedFiles.length || !data.game) {
+        throw new Error('Ember did not return an applicable game change.');
+      }
+      bump(`Validated ${generatedFiles.map(file => file.path).join(', ')}`);
       await pace();
 
-      if (editsMade.length > 0) {
-        setFilesByProject(prev => ({
-          ...prev,
-          [currentProject.id]: { ...prev[currentProject.id], contents: nextContents, files: nextFilesList },
-        }));
-        bump(`Saved changes to ${[...new Set(editsMade)].join(', ')}`);
-      } else {
-        bump('No files changed');
+      const nextContents = { ...currentFiles.contents };
+      const editsMade = [];
+      for (const file of generatedFiles) {
+        if (!file || typeof file.path !== 'string' || typeof file.content !== 'string') {
+          throw new Error('Ember returned a malformed file change.');
+        }
+        if (!currentFiles.files.includes(file.path)) {
+          throw new Error(`Ember returned an unknown project file: ${file.path}`);
+        }
+        if (file.content.length > 100_000) {
+          throw new Error(`Ember returned an oversized file: ${file.path}`);
+        }
+        if (file.path === 'game.json') {
+          try {
+            JSON.parse(file.content);
+          } catch {
+            throw new Error(`Ember returned invalid JSON for ${file.path}.`);
+          }
+        }
+        nextContents[file.path] = file.content;
+        editsMade.push(file.path);
       }
 
-      const suggestionList = SUGGESTIONS[currentProject.type];
-      suggestion = suggestionList[Math.floor(Math.random() * suggestionList.length)];
-      replyText = data.reply?.trim() ||
-        (editsMade.length > 0
-          ? `Done — updated ${[...new Set(editsMade)].join(', ')}. Check the Preview tab.`
-          : `I read through ${currentFiles.files.join(', ')} but didn't find a concrete edit to make for that yet — try being more specific about what should change.`);
+      setFilesByProject(prev => ({
+        ...prev,
+        [currentProject.id]: { ...prev[currentProject.id], contents: nextContents },
+      }));
+      touchedFile = editsMade[0];
+      bump(`Applied ${[...new Set(editsMade)].join(', ')}`);
+      await pace();
+      bump('Reloaded the live preview from the saved game definition');
+
+      const suggestionList = SUGGESTIONS[currentProject.type] || [];
+      suggestion = suggestionList[Math.floor(Math.random() * suggestionList.length)] || null;
+      replyText = data.summary?.trim() || data.reply?.trim() || `Built ${data.game.title}.`;
     } catch (err) {
-      // Real error path: this only runs when something above
-      // actually threw (network failure, bad worker response, a
-      // rule targeting a file that doesn't exist). Nothing fakes
-      // this state.
       bump(`Error: ${err.message}`);
       replyText = `Ember hit a snag: ${err.message}`;
       setLastBuildError(err.message);
@@ -1502,20 +1747,16 @@ export default function KilnApp() {
     ));
     if (touchedFile) setLastTouchedFile(touchedFile);
     setIsGenerating(false);
-    // No client-side quota changes here — Groq usage belongs to the
-    // provider account configured on the server.
   }, [filesByProject]);
 
   const handleSend = useCallback((text) => {
     const trimmed = (text ?? input).trim();
-    // A user-owned Groq key has no client-side quota to enforce, so
-    // only block while a request is already running.
-    if (!trimmed || isGenerating || (credits !== null && credits <= 0)) return;
+    if (!trimmed || isGenerating) return;
     setMessages(prev => [...prev, { id: `u-${Date.now()}`, role: 'user', text: trimmed }]);
     setInput('');
     setChatOpenMobile(true);
     runAssistantResponse(project, trimmed);
-  }, [input, isGenerating, credits, creditsLoading, runAssistantResponse, project]);
+  }, [input, isGenerating, runAssistantResponse, project]);
 
   const handleAssetLog = useCallback((label) => {
     setMessages(prev => {
@@ -1576,10 +1817,9 @@ export default function KilnApp() {
         <div className="flex items-center gap-2">
           <div
             className="hidden sm:flex items-center gap-1 text-xs text-stone-400 bg-stone-900 border border-stone-800 rounded-full px-2.5 py-1"
-            title={creditStatus.resetsAt ? `Resets ${formatResetTime(creditStatus.resetsAt)}` : undefined}
           >
             <Zap size={12} className="text-amber-400" />
-            {credits === null ? 'Groq AI' : `${credits}/${creditStatus.cap ?? 'available'} credits`}
+            Groq AI
           </div>
           <button className="hidden sm:flex text-sm px-3 py-1.5 rounded-md border border-stone-700 text-stone-300 hover:bg-stone-800 items-center gap-1.5">
             <Share2 size={14} /> Share
@@ -1627,19 +1867,6 @@ export default function KilnApp() {
             setInput={setInput}
             onSend={handleSend}
             isGenerating={isGenerating}
-            credits={credits}
-            creditsCap={creditStatus.cap}
-            resetsAt={creditStatus.resetsAt}
-            creditsLoading={creditsLoading}
-            onAddCredits={() => {
-              // Deliberately not touching creditStatus here — a
-              // button that refills the free tier client-side would
-              // defeat the whole point of reading real numbers from
-              // the Worker. A real "Upgrade" needs to change your
-              // actual plan/entitlement server-side; once it does,
-              // the next fetchCreditStatus (or the next chat
-              // response) will reflect it automatically.
-            }}
             onClose={() => setChatOpenMobile(false)}
           />
         </div>
@@ -1648,7 +1875,7 @@ export default function KilnApp() {
         )}
 
         <div className="flex-1 min-w-0 flex min-h-0 pt-20" style={{ fontFamily: "'Inter', system-ui, sans-serif" }}>
-          {activeTab === 'preview' && <PreviewPane project={project} buildError={lastBuildError} />}
+          {activeTab === 'preview' && <PreviewPane project={project} projectFiles={projectFiles} buildError={lastBuildError} />}
           {activeTab === 'assets' && <AssetsPane assets={assets} setAssets={setAssets} onLog={handleAssetLog} />}
           {activeTab === 'code' && <CodePane project={project} projectFiles={projectFiles} lastTouchedFile={lastTouchedFile} />}
         </div>
