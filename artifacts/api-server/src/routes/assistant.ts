@@ -98,6 +98,14 @@ type AssistantRequest = {
   responseFormat?: unknown;
   /** Existing game.js content, for edits in "code" responseFormat. */
   currentCode?: unknown;
+  /**
+   * The project's current asset list (name + whether it's an image),
+   * so Ember can reference real uploaded assets by name via
+   * Kiln.assets["name"] instead of only drawing shapes. Only name and
+   * isImage are needed here — actual image bytes never leave the
+   * browser; see resolveImageAssetsToDataUrls in code-sandbox.tsx.
+   */
+  assets?: unknown;
 };
 
 type GroqUsage = {
@@ -339,7 +347,9 @@ function buildCodeModePrompt(
   projectName: string,
   currentCode: unknown,
   userPrompt: string,
+  assets: unknown,
 ): string {
+  const assetLines = describeAssetsForPrompt(assets);
   return [
     "You are Ember, a game-building assistant that writes real, runnable JavaScript.",
     `Write or update the playable ${projectType} game "${projectName}" from the user's request.`,
@@ -354,11 +364,38 @@ function buildCodeModePrompt(
     "  Kiln.resetOutcome() - call when restarting the game so win()/lose() can fire again.",
     "  Kiln.setScore(number) - report the current score, if the game has one.",
     "  Kiln.log(...) - debug logging for the developer; not shown to the player.",
+    "  Kiln.assets['exact-name'] - a real, already-loaded <img> element for an uploaded project asset, ready to draw immediately: Kiln.ctx.drawImage(Kiln.assets['exact-name'], x, y, w, h). Only listed asset names below exist; never invent or fetch an asset that isn't listed.",
     "Never use import, export, require, fetch, XMLHttpRequest, WebSocket, localStorage, sessionStorage, or cookies - none of them work in this sandbox and using them will fail at runtime.",
     "Preserve the existing game's logic when the user asks for an edit, and change only what the request calls for. You are given the current game.js below and must return the complete updated file, not a diff or a partial snippet.",
+    `Available image assets (use the exact name as the Kiln.assets key): ${assetLines}`,
     `Current game.js:\n${typeof currentCode === "string" && currentCode.trim() ? currentCode : "(none yet - this is a new game)"}`,
     `User request: ${userPrompt.trim()}`,
   ].join("\n");
+}
+
+const MAX_ASSET_NAMES_IN_PROMPT = 30;
+const MAX_ASSET_NAME_LENGTH = 120;
+
+/**
+ * Turns the client's asset list into a short, safe line for the prompt.
+ * Only names and the isImage flag are ever used — actual image bytes
+ * never reach this server or Groq; see the doc comment on
+ * AssistantRequest.assets and resolveImageAssetsToDataUrls on the
+ * client, which is what actually gets pixels into the sandbox.
+ */
+function describeAssetsForPrompt(assets: unknown): string {
+  if (!Array.isArray(assets) || assets.length === 0) {
+    return "(none uploaded yet - only draw shapes/text unless the user uploads an image asset)";
+  }
+  const names = assets
+    .filter((entry): entry is Record<string, unknown> => !!entry && typeof entry === "object")
+    .filter((entry) => entry.isImage === true && typeof entry.name === "string")
+    .map((entry) => (entry.name as string).slice(0, MAX_ASSET_NAME_LENGTH))
+    .slice(0, MAX_ASSET_NAMES_IN_PROMPT);
+  if (names.length === 0) {
+    return "(none uploaded yet - only draw shapes/text unless the user uploads an image asset)";
+  }
+  return names.map((name) => `"${name}"`).join(", ");
 }
 
 router.get("/assistant/models", async (req, res) => {
@@ -429,7 +466,7 @@ router.post("/assistant", async (req, res) => {
     const projectType =
       body.project?.type === "3D" ? "3D" : "2D";
     const prompt = isCodeMode
-      ? buildCodeModePrompt(projectType, projectName, body.currentCode, body.prompt)
+      ? buildCodeModePrompt(projectType, projectName, body.currentCode, body.prompt, body.assets)
       : isBuild
       ? [
           "You are Ember, a game-building assistant.",
