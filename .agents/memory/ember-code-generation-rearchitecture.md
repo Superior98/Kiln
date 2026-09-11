@@ -22,21 +22,37 @@ current schema-based approach. Changing all of that at once with no way to run t
 app and see it work would be high-risk.
 
 **Planned phases:**
-1. **Sandboxed execution harness** (this phase — see `code-sandbox.tsx`). A
-   standalone component that runs arbitrary JS safely in a `sandbox="allow-scripts"`
-   iframe (deliberately no `allow-same-origin`) with a strict CSP (`connect-src
-   'none'`, etc.) and a narrow `postMessage` protocol (`kiln:ready`, `kiln:error`,
+1. **Sandboxed execution harness** (done — see `code-sandbox.tsx`). A standalone
+   component that runs arbitrary JS safely in a `sandbox="allow-scripts"` iframe
+   (deliberately no `allow-same-origin`) with a strict CSP (`connect-src 'none'`,
+   etc.) and a narrow `postMessage` protocol (`kiln:ready`, `kiln:error`,
    `kiln:win`, `kiln:lose`, `kiln:score`, `kiln:log`). Not wired into the live
    preview yet — verified in isolation (typecheck, bundle, and a functional test of
    the inline harness script covering the happy path, thrown errors, a hung/never-
    ready case, a per-frame error, and the win/lose double-fire guard).
-2. **Backend response format**: change `routes/assistant.ts` so Ember can return a
-   set of real file creates/edits instead of one `game.json` blob, and relax the
-   fixed per-project file whitelist so it can create new files (with validation
-   before anything is applied).
+2. **Backend response format** (done — see `routes/assistant.ts`). A new opt-in
+   `responseFormat: "code"` on `POST /assistant` (mode `"build"`) has Ember return
+   `{ summary, files: [{ path: "game.js", content }] }` instead of the fixed
+   `game.json` shape, targeting the `Kiln` global from `code-sandbox.tsx`. Fully
+   additive — omit `responseFormat` (or send `"schema"`) and behavior is byte-for-
+   byte the same as before `normalizeGameSpec`/`parseBuildReply`. `parseCodeBuildReply`
+   validates before anything reaches the client: JSON well-formed, bare `*.js`
+   filename only (no directory traversal/nesting), one file (matches the harness's
+   single inline script), 50k char cap, and a parse-only syntax check via
+   `new Function()` (never invoked) so a bad generation comes back as a clean error
+   instead of code that only fails once it's already in the browser. Verified with a
+   functional test suite (happy path + every rejection case) run against the real
+   module via temporary test-only exports (not committed) — I have no way to call
+   the real Groq API from outside Replit, so actual generation *quality* with this
+   new prompt is still unverified and should be the first thing tested live.
 3. **Wire the sandbox into `PreviewPane`** behind a per-project mode, so schema-based
    projects keep working exactly as they do today while new projects (or ones
-   explicitly migrated) run through the code path instead.
+   explicitly migrated) run through the code path instead. This is also where the
+   client's per-project file whitelist (`PROJECT_FILES` in `KilnApp.jsx`) needs a
+   `game.js` entry added for any project that opts into code mode, and where
+   `runAssistantResponse` needs to send `responseFormat: "code"` / `currentCode` and
+   handle the response shape from phase 2 instead of assuming `data.game` always
+   exists.
 4. **Migrate or dual-support** the three existing demo projects.
 
 **How to apply:** Don't skip straight to phase 2/3 without the harness from phase 1
