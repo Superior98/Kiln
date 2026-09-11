@@ -70,7 +70,52 @@ type GroqUsage = {
   prompt_tokens?: number;
   completion_tokens?: number;
   total_tokens?: number;
+  queue_time?: number;
+  prompt_time?: number;
+  completion_time?: number;
+  total_time?: number;
 };
+
+type GroqMetrics = {
+  clientElapsedTime: number;
+  queueTime: number;
+  promptTime: number;
+  completionTime: number;
+  totalTime: number;
+  tokensPerSecond: number;
+  promptTokens: number;
+  completionTokens: number;
+  totalTokens: number;
+  rateLimits: {
+    remainingRequests: string | null;
+    remainingTokens: string | null;
+    resetTokens: string | null;
+    resetRequests: string | null;
+  };
+};
+
+function readGroqMetrics(headers: Headers, usage: GroqUsage | null, clientElapsedTime: number): GroqMetrics {
+  const promptTokens = usage?.prompt_tokens ?? 0;
+  const completionTokens = usage?.completion_tokens ?? 0;
+  const completionTime = usage?.completion_time ?? 0;
+  return {
+    clientElapsedTime,
+    queueTime: usage?.queue_time ?? 0,
+    promptTime: usage?.prompt_time ?? 0,
+    completionTime,
+    totalTime: usage?.total_time ?? 0,
+    tokensPerSecond: completionTokens && completionTime > 0 ? completionTokens / completionTime : 0,
+    promptTokens,
+    completionTokens,
+    totalTokens: usage?.total_tokens ?? promptTokens + completionTokens,
+    rateLimits: {
+      remainingRequests: headers.get("x-ratelimit-remaining-requests"),
+      remainingTokens: headers.get("x-ratelimit-remaining-tokens"),
+      resetTokens: headers.get("x-ratelimit-reset-tokens"),
+      resetRequests: headers.get("x-ratelimit-reset-requests"),
+    },
+  };
+}
 
 const GAME_KINDS = new Set(["platformer", "topdown", "shooter", "runner", "explorer"]);
 
@@ -212,6 +257,7 @@ router.post("/assistant", async (req, res) => {
           `User request: ${body.prompt.trim()}`,
         ].join("\n")
       : body.prompt.trim();
+    const requestStartedAt = Date.now();
     const upstream = await fetch(GROQ_ENDPOINT, {
       method: "POST",
       headers: {
@@ -238,12 +284,15 @@ router.post("/assistant", async (req, res) => {
       usage?: GroqUsage;
     };
 
+    const clientElapsedTime = (Date.now() - requestStartedAt) / 1000;
+    const metrics = readGroqMetrics(upstream.headers, data.usage ?? null, clientElapsedTime);
+
     if (!upstream.ok) {
       const message =
         typeof data.error === "string"
           ? data.error
           : data.error?.message || `Groq responded with status ${upstream.status}`;
-      res.status(502).json({ error: message });
+      res.status(upstream.status === 429 ? 429 : 502).json({ error: message, model, metrics });
       return;
     }
 
@@ -258,7 +307,11 @@ router.post("/assistant", async (req, res) => {
               .trim()
           : (message?.reasoning_content ?? message?.reasoning)?.trim();
     if (!reply) {
-      res.status(502).json({ error: `Groq returned no text for model ${model}.` });
+      res.status(502).json({
+        error: `Groq returned no text for model ${model}.`,
+        model,
+        metrics,
+      });
       return;
     }
 
@@ -268,6 +321,7 @@ router.post("/assistant", async (req, res) => {
         res.status(502).json({
           error: "Ember returned an invalid game definition. Try the request again.",
           model,
+          metrics,
         });
         return;
       }
@@ -281,11 +335,12 @@ router.post("/assistant", async (req, res) => {
         }],
         model,
         usage: data.usage ?? null,
+        metrics,
       });
       return;
     }
 
-    res.json({ reply, model, usage: data.usage ?? null });
+    res.json({ reply, model, usage: data.usage ?? null, metrics });
   } catch (error) {
     req.log.error({ err: error }, "Groq assistant request failed");
     res.status(502).json({ error: "Unable to reach Groq right now." });

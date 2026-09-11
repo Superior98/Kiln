@@ -571,6 +571,52 @@ function formatResetTime(resetsAt) {
   return `in ${days}d`;
 }
 
+function formatMetricSeconds(value) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return '—';
+  return `${number < 1 ? number.toFixed(3) : number.toFixed(2)}s`;
+}
+
+function formatMetricCount(value) {
+  const number = Number(value);
+  return Number.isFinite(number) ? number.toLocaleString() : '—';
+}
+
+function GroqMetricsCard({ metrics }) {
+  if (!metrics) return null;
+  const limits = metrics.rateLimits || {};
+  const hasLimits = Object.values(limits).some(Boolean);
+  return (
+    <div className="rounded-xl border border-amber-900/40 bg-amber-950/10 overflow-hidden">
+      <div className="px-3 py-2 border-b border-amber-900/30 text-xs font-medium text-amber-300 flex items-center gap-1.5" style={{ fontFamily: "'IBM Plex Mono', monospace" }}>
+        <Zap size={13} />
+        Groq telemetry
+      </div>
+      <div className="grid grid-cols-2 gap-x-4 gap-y-2 px-3 py-2.5 text-[11px] text-stone-400" style={{ fontFamily: "'IBM Plex Mono', monospace" }}>
+        <span>Prompt tokens <strong className="text-stone-200">{formatMetricCount(metrics.promptTokens)}</strong></span>
+        <span>Output tokens <strong className="text-stone-200">{formatMetricCount(metrics.completionTokens)}</strong></span>
+        <span>Total tokens <strong className="text-stone-200">{formatMetricCount(metrics.totalTokens)}</strong></span>
+        <span>Generation <strong className="text-stone-200">{formatMetricCount(metrics.tokensPerSecond)} t/s</strong></span>
+        <span>Server time <strong className="text-stone-200">{formatMetricSeconds(metrics.totalTime)}</strong></span>
+        <span>Round trip <strong className="text-stone-200">{formatMetricSeconds(metrics.clientElapsedTime)}</strong></span>
+      </div>
+      {hasLimits && (
+        <div className="border-t border-amber-900/30 px-3 py-2 text-[11px] text-stone-500 space-y-1" style={{ fontFamily: "'IBM Plex Mono', monospace" }}>
+          <div className="text-stone-400">Current Groq rate limits</div>
+          <div className="flex flex-wrap gap-x-3 gap-y-1">
+            <span>Requests left: <strong className="text-stone-300">{limits.remainingRequests || '—'}</strong></span>
+            <span>Tokens left: <strong className="text-stone-300">{limits.remainingTokens || '—'}</strong></span>
+          </div>
+          <div className="flex flex-wrap gap-x-3 gap-y-1">
+            <span>Token reset: <strong className="text-stone-300">{limits.resetTokens || '—'}</strong></span>
+            <span>Request reset: <strong className="text-stone-300">{limits.resetRequests || '—'}</strong></span>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 /* ---------------------------------------------------------------
    Tiny syntax highlighter (good enough for a mockup)
 --------------------------------------------------------------- */
@@ -1552,6 +1598,7 @@ function ChatPanel({ project, messages, input, setInput, onSend, isGenerating, o
                         {m.text}
                       </div>
                     )}
+                    {m.metrics && <GroqMetricsCard metrics={m.metrics} />}
                     {m.suggestion && (
                       <button
                         onClick={() => onSend(m.suggestion)}
@@ -1613,6 +1660,7 @@ export default function KilnApp() {
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState('');
   const [isGenerating, setIsGenerating] = useState(false);
+  const [sessionUsage, setSessionUsage] = useState({ requests: 0, totalTokens: 0 });
   const [assetsByProject, setAssetsByProject] = useState(PROJECT_ASSETS);
   const [projectOpen, setProjectOpen] = useState(false);
   const [projectId, setProjectId] = useState(PROJECTS[0].id);
@@ -1666,6 +1714,7 @@ export default function KilnApp() {
     let replyText;
     let suggestion = null;
     let touchedFile = null;
+    let responseMetrics = null;
 
     try {
       await pace();
@@ -1687,11 +1736,17 @@ export default function KilnApp() {
         }),
       });
 
-      if (!response.ok) {
-        const errorBody = await response.json().catch(() => ({}));
-        throw new Error(errorBody.error || `Build service responded with status ${response.status}`);
+      const data = await response.json().catch(() => ({}));
+      responseMetrics = data.metrics || null;
+      if (responseMetrics) {
+        setSessionUsage(prev => ({
+          requests: prev.requests + 1,
+          totalTokens: prev.totalTokens + (Number(responseMetrics.totalTokens) || 0),
+        }));
       }
-      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.error || `Build service responded with status ${response.status}`);
+      }
 
       const generatedFiles = Array.isArray(data.files) ? data.files : [];
       if (!generatedFiles.length || !data.game) {
@@ -1742,7 +1797,7 @@ export default function KilnApp() {
     }
 
     setMessages(prev => prev.map(m => m.id === id
-      ? { ...m, text: replyText, suggestion }
+      ? { ...m, text: replyText, suggestion, metrics: responseMetrics }
       : m
     ));
     if (touchedFile) setLastTouchedFile(touchedFile);
@@ -1817,9 +1872,13 @@ export default function KilnApp() {
         <div className="flex items-center gap-2">
           <div
             className="hidden sm:flex items-center gap-1 text-xs text-stone-400 bg-stone-900 border border-stone-800 rounded-full px-2.5 py-1"
+            title={`${sessionUsage.requests} monitored Groq request${sessionUsage.requests === 1 ? '' : 's'} this session`}
           >
             <Zap size={12} className="text-amber-400" />
             Groq AI
+            {sessionUsage.totalTokens > 0 && (
+              <span className="text-stone-500">· {formatMetricCount(sessionUsage.totalTokens)} tokens</span>
+            )}
           </div>
           <button className="hidden sm:flex text-sm px-3 py-1.5 rounded-md border border-stone-700 text-stone-300 hover:bg-stone-800 items-center gap-1.5">
             <Share2 size={14} /> Share
