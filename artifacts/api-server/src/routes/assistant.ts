@@ -88,6 +88,16 @@ type AssistantRequest = {
   files?: unknown;
   model?: unknown;
   image?: unknown;
+  /**
+   * "schema" (default, omit for existing behavior) fills in the fixed
+   * game.json shape via normalizeGameSpec/parseBuildReply, same as always.
+   * "code" is the new mode: Ember writes a real game.js file, run inside
+   * the sandboxed iframe from code-sandbox.tsx, instead of filling a fixed
+   * set of fields. See parseCodeBuildReply below.
+   */
+  responseFormat?: unknown;
+  /** Existing game.js content, for edits in "code" responseFormat. */
+  currentCode?: unknown;
 };
 
 type GroqUsage = {
@@ -234,6 +244,123 @@ function parseBuildReply(reply: string, fallbackTitle: string) {
   }
 }
 
+// --- "code" responseFormat: Ember writes real game.js, instead of filling
+// the fixed game.json schema above. Additive and fully separate from the
+// schema-mode functions above it — existing schema-mode requests are
+// untouched by anything below. ---
+
+const CODE_MODE_FILENAME_PATTERN = /^[a-zA-Z0-9_-]+\.js$/;
+const MAX_CODE_FILE_LENGTH = 50_000;
+const MAX_CODE_FILES = 1; // the sandbox harness runs one inline script; see code-sandbox.tsx
+
+type CodeBuildFile = { path: string; content: string };
+type CodeBuildResult = { summary: string; files: CodeBuildFile[] };
+
+/**
+ * Parse-only syntax check (never executes the code). This is a fast,
+ * dependency-free way to reject a malformed generation server-side and
+ * give the user a clean "try again" instead of silently applying broken
+ * code that only fails once it hits the sandboxed iframe in the browser.
+ * It is not a security boundary by itself — CodeSandbox's iframe
+ * isolation (sandbox="allow-scripts", no allow-same-origin, strict CSP)
+ * is what actually contains untrusted code once it runs; this check only
+ * improves the failure mode for honest mistakes like a dropped brace.
+ */
+function checkJsSyntax(code: string): { ok: true } | { ok: false; message: string } {
+  try {
+    // eslint-disable-next-line no-new-func -- parse-only, never invoked.
+    new Function(code);
+    return { ok: true };
+  } catch (error) {
+    return { ok: false, message: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+function parseCodeBuildReply(reply: string): CodeBuildResult | { error: string } {
+  const withoutFence = reply
+    .replace(/^```(?:js|javascript|json)?\s*/i, "")
+    .replace(/\s*```$/i, "")
+    .trim();
+  const start = withoutFence.indexOf("{");
+  const end = withoutFence.lastIndexOf("}");
+  if (start < 0 || end <= start) {
+    return { error: "Ember's reply did not contain a JSON object." };
+  }
+
+  let parsed: Record<string, unknown>;
+  try {
+    parsed = JSON.parse(withoutFence.slice(start, end + 1)) as Record<string, unknown>;
+  } catch {
+    return { error: "Ember's reply was not valid JSON." };
+  }
+
+  const rawFiles = parsed.files;
+  if (!Array.isArray(rawFiles) || rawFiles.length === 0) {
+    return { error: "Ember's reply did not include any files." };
+  }
+  if (rawFiles.length > MAX_CODE_FILES) {
+    return { error: `Ember returned ${rawFiles.length} files; only ${MAX_CODE_FILES} is supported right now.` };
+  }
+
+  const files: CodeBuildFile[] = [];
+  for (const raw of rawFiles) {
+    if (!raw || typeof raw !== "object") {
+      return { error: "Ember returned a malformed file entry." };
+    }
+    const entry = raw as Record<string, unknown>;
+    const path = entry.path;
+    const content = entry.content;
+    if (typeof path !== "string" || typeof content !== "string") {
+      return { error: "Ember returned a file entry missing a path or content string." };
+    }
+    if (!CODE_MODE_FILENAME_PATTERN.test(path)) {
+      return {
+        error: `Ember returned an unsafe or unsupported file name: ${path}. Only a simple .js filename is allowed (no paths, no directory traversal).`,
+      };
+    }
+    if (content.length > MAX_CODE_FILE_LENGTH) {
+      return { error: `Ember returned an oversized file: ${path} (${content.length} chars, max ${MAX_CODE_FILE_LENGTH}).` };
+    }
+    const syntax = checkJsSyntax(content);
+    if (!syntax.ok) {
+      return { error: `Ember returned ${path} with a JavaScript syntax error: ${syntax.message}` };
+    }
+    files.push({ path, content });
+  }
+
+  return {
+    summary: typeof parsed.summary === "string" ? parsed.summary.trim().slice(0, 500) : "",
+    files,
+  };
+}
+
+function buildCodeModePrompt(
+  projectType: string,
+  projectName: string,
+  currentCode: unknown,
+  userPrompt: string,
+): string {
+  return [
+    "You are Ember, a game-building assistant that writes real, runnable JavaScript.",
+    `Write or update the playable ${projectType} game "${projectName}" from the user's request.`,
+    'Return ONLY valid JSON with this exact shape: {"summary":"short explanation","files":[{"path":"game.js","content":"..."}]}.',
+    "Write exactly one file named game.js containing the complete game logic as plain JavaScript. No import, export, require, or bundler — it runs as a single inline <script>, not a module.",
+    "The code runs inside a sandboxed iframe with no network access and no DOM besides one canvas. It can only use the global `Kiln` object:",
+    "  Kiln.canvas, Kiln.ctx (a 2D canvas context), Kiln.width, Kiln.height - the drawing surface.",
+    "  Kiln.isKeyDown(key) - true while a key is held, e.g. Kiln.isKeyDown('arrowleft') or Kiln.isKeyDown(' ') for space.",
+    "  Kiln.onFrame(function(dt) { ... }) - register the per-frame update-and-draw callback; dt is seconds since the last frame. Clear and redraw the canvas yourself each frame.",
+    "  Kiln.ready() - call once, after setup, to signal the game is ready. Required, or the preview shows a timeout error.",
+    "  Kiln.win() / Kiln.lose() - call when the player reaches a win or lose condition. Each only fires once until Kiln.resetOutcome() is called, so it's safe to check the condition every frame.",
+    "  Kiln.resetOutcome() - call when restarting the game so win()/lose() can fire again.",
+    "  Kiln.setScore(number) - report the current score, if the game has one.",
+    "  Kiln.log(...) - debug logging for the developer; not shown to the player.",
+    "Never use import, export, require, fetch, XMLHttpRequest, WebSocket, localStorage, sessionStorage, or cookies - none of them work in this sandbox and using them will fail at runtime.",
+    "Preserve the existing game's logic when the user asks for an edit, and change only what the request calls for. You are given the current game.js below and must return the complete updated file, not a diff or a partial snippet.",
+    `Current game.js:\n${typeof currentCode === "string" && currentCode.trim() ? currentCode : "(none yet - this is a new game)"}`,
+    `User request: ${userPrompt.trim()}`,
+  ].join("\n");
+}
+
 router.get("/assistant/models", async (req, res) => {
   const apiKey = process.env.GROQ_API_KEY;
   if (!apiKey) {
@@ -296,11 +423,14 @@ router.post("/assistant", async (req, res) => {
       model = await resolveGroqModel(apiKey);
     }
     const isBuild = body.mode === "build";
+    const isCodeMode = isBuild && body.responseFormat === "code";
     const projectName =
       typeof body.project?.name === "string" ? body.project.name : "Untitled Game";
     const projectType =
       body.project?.type === "3D" ? "3D" : "2D";
-    const prompt = isBuild
+    const prompt = isCodeMode
+      ? buildCodeModePrompt(projectType, projectName, body.currentCode, body.prompt)
+      : isBuild
       ? [
           "You are Ember, a game-building assistant.",
           `Create or update the playable ${projectType} game "${projectName}" from the user's request.`,
@@ -380,6 +510,24 @@ router.post("/assistant", async (req, res) => {
       return;
     }
 
+    if (isCodeMode) {
+      const build = parseCodeBuildReply(reply);
+      if ("error" in build) {
+        res.status(502).json({ error: build.error, model, metrics });
+        return;
+      }
+      res.json({
+        reply: build.summary || "Updated the game code.",
+        summary: build.summary || "Updated the game code.",
+        responseFormat: "code",
+        files: build.files,
+        model,
+        usage: data.usage ?? null,
+        metrics,
+      });
+      return;
+    }
+
     if (isBuild) {
       const build = parseBuildReply(reply, projectName);
       if (!build) {
@@ -394,6 +542,7 @@ router.post("/assistant", async (req, res) => {
         reply: build.summary || `Built ${build.game.title}.`,
         summary: build.summary || `Built ${build.game.title}.`,
         game: build.game,
+        responseFormat: "schema",
         files: [{
           path: "game.json",
           content: JSON.stringify(build.game, null, 2),
