@@ -5,7 +5,7 @@ import {
   Maximize2, Smartphone, Monitor, Code2, Image as ImageIcon,
   Upload, Search, CheckCircle2, AlertTriangle,
   ChevronDown, X, Menu, Wand2, Share2, Zap, User, FileCode2,
-  RotateCw, Download, MessageSquare
+  RotateCw, Download, MessageSquare, ExternalLink
 } from 'lucide-react';
 
 /* ---------------------------------------------------------------
@@ -25,6 +25,16 @@ const PROJECTS = [
 // AI requests go through the shared API server so the Groq key stays
 // server-side and is never exposed in the browser.
 const ASSISTANT_API_PATH = '/api/assistant';
+const MODELS_API_PATH = '/api/assistant/models';
+const PUBLISH_API_PATH = '/api/publish';
+// Fallback shown before the real list loads from /api/assistant/models —
+// mirrors the server's own PREFERRED_MODELS order so the "best" pick matches.
+const FALLBACK_MODELS = [
+  { id: 'openai/gpt-oss-20b', best: true },
+  { id: 'openai/gpt-oss-120b', best: false },
+  { id: 'llama-3.3-70b-versatile', best: false },
+  { id: 'llama-3.1-8b-instant', best: false },
+];
 const CONFIG_3D = {
   fov: 75, near: 0.1, far: 1000,
   camPos: { x: 0, y: 50, z: 100 },
@@ -571,6 +581,23 @@ function formatResetTime(resetsAt) {
   return `in ${days}d`;
 }
 
+function slugifyPreview(name) {
+  return (name || 'game').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '') || 'game';
+}
+
+function formatRelativeTime(isoOrTimestamp) {
+  const then = typeof isoOrTimestamp === 'number' ? isoOrTimestamp : new Date(isoOrTimestamp).getTime();
+  if (Number.isNaN(then)) return '';
+  const diffSeconds = Math.max(0, Math.floor((Date.now() - then) / 1000));
+  if (diffSeconds < 60) return 'less than a minute ago';
+  const diffMinutes = Math.floor(diffSeconds / 60);
+  if (diffMinutes < 60) return `${diffMinutes} minute${diffMinutes === 1 ? '' : 's'} ago`;
+  const diffHours = Math.floor(diffMinutes / 60);
+  if (diffHours < 24) return `about ${diffHours} hour${diffHours === 1 ? '' : 's'} ago`;
+  const diffDays = Math.floor(diffHours / 24);
+  return `${diffDays} day${diffDays === 1 ? '' : 's'} ago`;
+}
+
 function formatMetricSeconds(value) {
   const number = Number(value);
   if (!Number.isFinite(number)) return '—';
@@ -708,6 +735,31 @@ function EmberAvatar({ size = 32 }) {
       style={{ width: size, height: size }}
       onError={() => setFailed(true)}
     />
+  );
+}
+
+function Modal({ title, onClose, children, width = 'max-w-md' }) {
+  useEffect(() => {
+    const onKey = (e) => { if (e.key === 'Escape') onClose(); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose]);
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/60 pt-24 px-4" onClick={onClose}>
+      <div
+        className={`w-full ${width} bg-stone-950 border border-stone-800 rounded-xl shadow-2xl overflow-hidden`}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-center justify-between px-5 pt-5">
+          <h2 className="text-lg font-semibold text-stone-100">{title}</h2>
+          <button onClick={onClose} className="text-stone-500 hover:text-stone-200">
+            <X size={18} />
+          </button>
+        </div>
+        <div className="p-5 pt-3">{children}</div>
+      </div>
+    </div>
   );
 }
 
@@ -1153,9 +1205,16 @@ function UnavailablePreview({ message, onRetry }) {
   );
 }
 
-function PreviewPane({ project, projectFiles, buildError }) {
+function PreviewPane({ project, projectFiles, buildError, previewBoxRef }) {
   const [isPlaying, setIsPlaying] = useState(true);
   const [device, setDevice] = useState('desktop');
+  const [isFullscreen, setIsFullscreen] = useState(false);
+
+  useEffect(() => {
+    const onChange = () => setIsFullscreen(Boolean(document.fullscreenElement));
+    document.addEventListener('fullscreenchange', onChange);
+    return () => document.removeEventListener('fullscreenchange', onChange);
+  }, []);
   // Local error state, but it is only ever set by a real failure:
   // either a build error bubbled up from KilnApp (a failed
   // generation) or a runtime failure thrown by Preview3D itself
@@ -1193,7 +1252,14 @@ function PreviewPane({ project, projectFiles, buildError }) {
           >
             {device === 'desktop' ? <Monitor size={15} /> : <Smartphone size={15} />}
           </button>
-          <button className="p-1.5 rounded hover:bg-stone-800 hover:text-stone-200 transition-colors">
+          <button
+            onClick={() => {
+              if (document.fullscreenElement) document.exitFullscreen();
+              else previewBoxRef?.current?.requestFullscreen?.();
+            }}
+            className={`p-1.5 rounded transition-colors ${isFullscreen ? 'bg-amber-500/15 text-amber-400' : 'hover:bg-stone-800 hover:text-stone-200'}`}
+            title="Toggle fullscreen"
+          >
             <Maximize2 size={15} />
           </button>
         </div>
@@ -1206,7 +1272,9 @@ function PreviewPane({ project, projectFiles, buildError }) {
 
       <div className="flex-1 flex flex-col items-center justify-center p-6 min-h-0 bg-[#121017]">
         <div
+          ref={previewBoxRef}
           className={`relative rounded-xl overflow-hidden border border-stone-800 bg-black shadow-2xl transition-all duration-300 ${
+            isFullscreen ? 'w-screen h-screen max-w-none aspect-auto' :
             device === 'desktop' ? 'w-full max-w-3xl aspect-video' : 'w-full max-w-[300px] aspect-[9/16]'
           }`}
         >
@@ -1524,8 +1592,218 @@ function CodePane({ project, projectFiles, lastTouchedFile }) {
    Chat panel
 --------------------------------------------------------------- */
 
-function ChatPanel({ project, messages, input, setInput, onSend, isGenerating, onClose }) {
+function CleanContextModal({ onCancel, onConfirm }) {
+  return (
+    <Modal title="Clean up chat context?" onClose={onCancel}>
+      <p className="text-sm text-stone-400">Start a fresh chat context for future edits.</p>
+      <p className="text-sm text-stone-400 mt-3">
+        Your project files and version history stay unchanged. This helps Ember focus on the
+        current project state instead of earlier chat messages.
+      </p>
+      <div className="flex justify-end gap-2 mt-5">
+        <button
+          onClick={onCancel}
+          className="text-sm px-3.5 py-2 rounded-md border border-stone-700 text-stone-300 hover:bg-stone-800"
+        >
+          Cancel
+        </button>
+        <button
+          onClick={onConfirm}
+          className="text-sm px-3.5 py-2 rounded-md bg-red-500/90 hover:bg-red-500 text-white flex items-center gap-1.5"
+        >
+          <Wand2 size={14} /> Clean Context
+        </button>
+      </div>
+    </Modal>
+  );
+}
+
+function VersionHistoryModal({ versions, onClose, onRestore }) {
+  return (
+    <Modal title="Version History" onClose={onClose} width="max-w-lg">
+      <div className="max-h-[60vh] overflow-y-auto -mx-1 px-1 space-y-3">
+        {versions.length === 0 && (
+          <p className="text-sm text-stone-500">No edits yet — versions show up here once Ember applies a change.</p>
+        )}
+        {versions.map((v, i) => (
+          <div
+            key={v.id}
+            className={`rounded-lg border px-3.5 py-3 ${i === 0 ? 'border-amber-500/50 bg-amber-500/5' : 'border-stone-800'}`}
+          >
+            <div className="flex items-start justify-between gap-2">
+              <div className="text-sm text-stone-200">{v.label}</div>
+              {i === 0 && (
+                <span className="text-[10px] uppercase tracking-wide text-amber-400 border border-amber-500/40 rounded-full px-2 py-0.5 shrink-0">
+                  Current
+                </span>
+              )}
+            </div>
+            <div className="text-xs text-stone-500 mt-1">{formatRelativeTime(v.timestamp)}</div>
+            {i !== 0 && (
+              <button
+                onClick={() => onRestore(v)}
+                className="mt-2 text-xs px-2.5 py-1 rounded-md border border-stone-700 text-stone-300 hover:bg-stone-800"
+              >
+                Restore this version
+              </button>
+            )}
+          </div>
+        ))}
+      </div>
+    </Modal>
+  );
+}
+
+function ModelMenu({ models, selectedModel, onSelect, onClose }) {
+  return (
+    <div className="absolute bottom-full left-0 mb-2 w-56 bg-stone-900 border border-stone-800 rounded-lg shadow-2xl overflow-hidden z-40">
+      {models.map((m) => (
+        <button
+          key={m.id}
+          onClick={() => { onSelect(m.id); onClose(); }}
+          className={`w-full flex items-center justify-between gap-2 px-3 py-2 text-sm text-left hover:bg-stone-800 ${
+            m.id === selectedModel ? 'text-amber-400' : 'text-stone-300'
+          }`}
+        >
+          <span className="truncate">{m.id}</span>
+          {m.best && (
+            <span className="text-[10px] uppercase tracking-wide bg-amber-500/15 text-amber-400 border border-amber-500/30 rounded-full px-1.5 py-0.5 shrink-0">
+              Best
+            </span>
+          )}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function ShareModal({ onClose, publishInfo, onPublish, isPublishing }) {
+  const shareUrl = publishInfo ? `${window.location.origin}/play/${publishInfo.slug}` : null;
+  const [copied, setCopied] = useState(false);
+
+  const copyLink = async () => {
+    if (!shareUrl) return;
+    try {
+      await navigator.clipboard.writeText(shareUrl);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      // Clipboard access can be blocked (permissions, non-secure context);
+      // the link is still visible and selectable in the input either way.
+    }
+  };
+
+  if (!publishInfo) {
+    return (
+      <Modal title="Share" onClose={onClose}>
+        <p className="text-sm text-stone-400">Publish your project first to get a shareable link.</p>
+        <button
+          onClick={onPublish}
+          disabled={isPublishing}
+          className="mt-4 w-full text-sm px-3.5 py-2.5 rounded-md bg-amber-500 hover:bg-amber-400 disabled:bg-stone-700 disabled:text-stone-500 text-stone-950 font-medium flex items-center justify-center gap-1.5"
+        >
+          🚀 {isPublishing ? 'Publishing…' : 'Publish'}
+        </button>
+      </Modal>
+    );
+  }
+
+  return (
+    <Modal title="Share" onClose={onClose}>
+      <div className="text-xs uppercase tracking-wide text-stone-500 mb-1.5">Share link</div>
+      <div className="flex items-center gap-2 bg-stone-900 border border-stone-800 rounded-md px-3 py-2">
+        <span className="flex-1 text-sm text-stone-300 truncate">{shareUrl}</span>
+        <button onClick={() => window.open(shareUrl, '_blank', 'noopener')} title="Open" className="text-stone-500 hover:text-stone-200 shrink-0">
+          <ExternalLink size={15} />
+        </button>
+        <button onClick={copyLink} title="Copy link" className="text-stone-500 hover:text-stone-200 shrink-0">
+          {copied ? <CheckCircle2 size={15} className="text-emerald-400" /> : <Share2 size={15} />}
+        </button>
+      </div>
+      <p className="text-xs text-stone-500 mt-2">
+        Anyone with this link can play it while this server stays running. There's no accounts or
+        hosting system behind this yet, so the link won't survive a server restart.
+      </p>
+    </Modal>
+  );
+}
+
+function PublishModal({ onClose, project, publishInfo, onPublish, isPublishing, buildError }) {
+  const previewSlug = publishInfo?.slug ?? slugifyPreview(project.name);
+  const previewUrl = `${window.location.origin}/play/${previewSlug}`;
+
+  return (
+    <Modal title="Publish" onClose={onClose}>
+      <div className="flex items-center gap-1.5 text-sm text-stone-300">
+        <span className={`h-2 w-2 rounded-full ${publishInfo ? 'bg-emerald-400' : 'bg-stone-600'}`} />
+        {publishInfo ? `Live · ${formatRelativeTime(publishInfo.publishedAt)}` : 'Not published'}
+      </div>
+
+      {!publishInfo && (
+        <p className="text-xs text-stone-500 mt-3 mb-1">Your game URL will be:</p>
+      )}
+      {!publishInfo && <p className="text-sm text-stone-400 break-all mb-4">{previewUrl}</p>}
+
+      {buildError ? (
+        <button
+          disabled
+          className="w-full text-sm px-3.5 py-2.5 rounded-md border border-stone-700 text-stone-500 flex items-center justify-center gap-1.5 cursor-not-allowed"
+          title={buildError}
+        >
+          🚀 Errors Detected
+        </button>
+      ) : (
+        <button
+          onClick={onPublish}
+          disabled={isPublishing}
+          className="w-full text-sm px-3.5 py-2.5 rounded-md bg-amber-500 hover:bg-amber-400 disabled:bg-stone-700 disabled:text-stone-500 text-stone-950 font-medium flex items-center justify-center gap-1.5"
+        >
+          🚀 {isPublishing ? 'Publishing…' : publishInfo ? 'Publish update' : 'Publish'}
+        </button>
+      )}
+
+      {publishInfo && (
+        <button
+          onClick={() => window.open(previewUrl, '_blank', 'noopener')}
+          className="w-full mt-2 text-sm px-3.5 py-2.5 rounded-md border border-stone-700 text-stone-300 hover:bg-stone-800 flex items-center justify-center gap-1.5"
+        >
+          <Share2 size={14} /> Share
+        </button>
+      )}
+    </Modal>
+  );
+}
+
+function AvatarMenu({ onClose, sessionUsage, onOpenProjects }) {
+  return (
+    <div className="absolute top-full right-0 mt-2 w-64 bg-stone-900 border border-stone-800 rounded-lg shadow-2xl overflow-hidden z-40 text-sm">
+      <div className="px-4 py-3 border-b border-stone-800 space-y-1.5">
+        <div className="flex items-center gap-1.5 text-stone-300">
+          <Zap size={13} className="text-amber-400" />
+          {sessionUsage.requests} request{sessionUsage.requests === 1 ? '' : 's'} this session
+        </div>
+        <div className="flex items-center gap-1.5 text-stone-500 text-xs">
+          {formatMetricCount(sessionUsage.totalTokens)} total Groq tokens used
+        </div>
+      </div>
+      <button
+        onClick={() => { onOpenProjects(); onClose(); }}
+        className="w-full text-left px-4 py-2.5 text-stone-300 hover:bg-stone-800 flex items-center gap-2"
+      >
+        <FileCode2 size={14} /> My Projects
+      </button>
+    </div>
+  );
+}
+
+function ChatPanel({
+  project, messages, input, setInput, onSend, isGenerating, onClose,
+  pendingAttachment, onPickFile, onScreenshot, onRemoveAttachment,
+  models, selectedModel, onSelectModel, onOpenClean, onOpenHistory,
+}) {
   const scrollRef = useRef(null);
+  const fileInputRef = useRef(null);
+  const [showModelMenu, setShowModelMenu] = useState(false);
   const starters = STARTER_PROMPTS[project.type];
 
   useEffect(() => {
@@ -1588,6 +1866,9 @@ function ChatPanel({ project, messages, input, setInput, onSend, isGenerating, o
               <div className={`max-w-[85%] ${m.role === 'user' ? '' : 'flex-1'}`}>
                 {m.role === 'user' ? (
                   <div className="bg-stone-800 rounded-2xl rounded-tr-sm px-3 py-2 text-sm text-stone-100">
+                    {m.attachment && (
+                      <img src={m.attachment} alt="Attached" className="rounded-lg mb-1.5 max-h-32 object-cover" />
+                    )}
                     {m.text}
                   </div>
                 ) : (
@@ -1617,11 +1898,39 @@ function ChatPanel({ project, messages, input, setInput, onSend, isGenerating, o
       </div>
 
       <div className="border-t border-stone-800 p-3 shrink-0">
-        <div className="flex items-end gap-2 bg-stone-900 border border-stone-800 rounded-xl px-3 py-2 focus-within:border-amber-500/40">
+        {pendingAttachment && (
+          <div className="relative inline-block mb-2">
+            <img
+              src={pendingAttachment}
+              alt="Attached"
+              className="h-16 w-16 object-cover rounded-lg border border-stone-800"
+            />
+            <button
+              onClick={onRemoveAttachment}
+              className="absolute -top-1.5 -right-1.5 h-5 w-5 rounded-full bg-black/80 border border-stone-700 flex items-center justify-center text-stone-300 hover:text-white"
+            >
+              <X size={11} />
+            </button>
+          </div>
+        )}
+        <div
+          className="flex items-end gap-2 bg-stone-900 border border-stone-800 rounded-xl px-3 py-2 focus-within:border-amber-500/40"
+          onDragOver={(e) => e.preventDefault()}
+          onDrop={(e) => {
+            e.preventDefault();
+            const file = e.dataTransfer.files?.[0];
+            if (file && file.type.startsWith('image/')) onPickFile(file);
+          }}
+        >
           <textarea
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={handleKeyDown}
+            onPaste={(e) => {
+              const item = Array.from(e.clipboardData.items || []).find((i) => i.type.startsWith('image/'));
+              const file = item?.getAsFile();
+              if (file) onPickFile(file);
+            }}
             disabled={isGenerating}
             rows={1}
             placeholder="Ask Ember… or drag, drop, or paste an image"
@@ -1636,14 +1945,57 @@ function ChatPanel({ project, messages, input, setInput, onSend, isGenerating, o
           </button>
         </div>
         <div className="flex items-center justify-between mt-2 px-0.5">
-          <button className="text-[11px] px-2 py-1 rounded-md border border-stone-800 text-stone-500 flex items-center gap-1">
-            ember <ChevronDown size={11} />
-          </button>
+          <div className="relative">
+            <button
+              onClick={() => setShowModelMenu((v) => !v)}
+              className="text-[11px] px-2 py-1 rounded-md border border-stone-800 text-stone-500 flex items-center gap-1 hover:border-stone-700 hover:text-stone-300"
+            >
+              {selectedModel} <ChevronDown size={11} />
+            </button>
+            {showModelMenu && (
+              <>
+                <div className="fixed inset-0 z-30" onClick={() => setShowModelMenu(false)} />
+                <ModelMenu
+                  models={models}
+                  selectedModel={selectedModel}
+                  onSelect={onSelectModel}
+                  onClose={() => setShowModelMenu(false)}
+                />
+              </>
+            )}
+          </div>
           <div className="flex items-center gap-2.5 text-stone-600">
-            <Paperclip size={14} className="hover:text-stone-300 cursor-pointer transition-colors" />
-            <Camera size={14} className="hover:text-stone-300 cursor-pointer transition-colors" />
-            <Wand2 size={14} className="hover:text-stone-300 cursor-pointer transition-colors" />
-            <History size={14} className="hover:text-stone-300 cursor-pointer transition-colors" />
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept="image/*"
+              className="hidden"
+              onChange={(e) => {
+                const file = e.target.files?.[0];
+                if (file) onPickFile(file);
+                e.target.value = '';
+              }}
+            />
+            <Paperclip
+              size={14}
+              onClick={() => fileInputRef.current?.click()}
+              className="hover:text-stone-300 cursor-pointer transition-colors"
+            />
+            <Camera
+              size={14}
+              onClick={onScreenshot}
+              className="hover:text-stone-300 cursor-pointer transition-colors"
+            />
+            <Wand2
+              size={14}
+              onClick={onOpenClean}
+              className="hover:text-stone-300 cursor-pointer transition-colors"
+            />
+            <History
+              size={14}
+              onClick={onOpenHistory}
+              className="hover:text-stone-300 cursor-pointer transition-colors"
+            />
           </div>
         </div>
       </div>
@@ -1671,9 +2023,47 @@ export default function KilnApp() {
   const [lastBuildError, setLastBuildError] = useState(null);
   const [lastTouchedFile, setLastTouchedFile] = useState(null);
 
+  // New, previously-decorative controls: attachments, model choice,
+  // version history, and the share/publish flow.
+  const [pendingAttachment, setPendingAttachment] = useState(null);
+  const [models, setModels] = useState(FALLBACK_MODELS);
+  const [selectedModel, setSelectedModel] = useState(FALLBACK_MODELS[0].id);
+  const [versionsByProject, setVersionsByProject] = useState({});
+  const [publishedByProject, setPublishedByProject] = useState(() => {
+    try { return JSON.parse(window.localStorage.getItem('kiln-published-v1') || '{}'); }
+    catch { return {}; }
+  });
+  const [isPublishing, setIsPublishing] = useState(false);
+  const [showCleanModal, setShowCleanModal] = useState(false);
+  const [showHistoryModal, setShowHistoryModal] = useState(false);
+  const [showShareModal, setShowShareModal] = useState(false);
+  const [showPublishModal, setShowPublishModal] = useState(false);
+  const [showAvatarMenu, setShowAvatarMenu] = useState(false);
+  const previewBoxRef = useRef(null);
+
   useEffect(() => {
     window.localStorage.setItem('kiln-project-files-v1', JSON.stringify(filesByProject));
   }, [filesByProject]);
+
+  useEffect(() => {
+    window.localStorage.setItem('kiln-published-v1', JSON.stringify(publishedByProject));
+  }, [publishedByProject]);
+
+  useEffect(() => {
+    fetch(MODELS_API_PATH)
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (data?.models?.length) {
+          setModels(data.models);
+          setSelectedModel((current) =>
+            data.models.some((m) => m.id === current) ? current : data.models[0].id
+          );
+        }
+      })
+      .catch(() => {
+        // Server may not have GROQ_API_KEY configured yet; fall back list stays.
+      });
+  }, []);
 
   const project = useMemo(() => PROJECTS.find(p => p.id === projectId), [projectId]);
   const assets = assetsByProject[projectId];
@@ -1684,6 +2074,8 @@ export default function KilnApp() {
     }));
   }, [projectId]);
   const projectFiles = filesByProject[projectId];
+  const versions = versionsByProject[projectId] || [];
+  const publishInfo = publishedByProject[projectId] || null;
 
   // Switching projects clears in-flight chat state so a 2D work log
   // doesn't linger while looking at a 3D project, and vice versa.
@@ -1692,9 +2084,82 @@ export default function KilnApp() {
     setIsGenerating(false);
     setLastBuildError(null);
     setLastTouchedFile(null);
+    setPendingAttachment(null);
   }, [projectId]);
 
-  const runAssistantResponse = useCallback(async (currentProject, userPrompt) => {
+  const readFileAsDataUrl = (file) => new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = () => reject(reader.error);
+    reader.readAsDataURL(file);
+  });
+
+  const handlePickFile = useCallback(async (file) => {
+    if (!file.type.startsWith('image/')) return;
+    if (file.size > 8 * 1024 * 1024) {
+      setMessages(prev => [...prev, { id: `s-${Date.now()}`, role: 'system', text: 'That image is too large to attach (8MB max).' }]);
+      return;
+    }
+    const dataUrl = await readFileAsDataUrl(file);
+    setPendingAttachment(dataUrl);
+  }, []);
+
+  const handleScreenshot = useCallback(() => {
+    const canvas = previewBoxRef.current?.querySelector('canvas');
+    if (!canvas) return;
+    try {
+      setPendingAttachment(canvas.toDataURL('image/png'));
+    } catch {
+      setMessages(prev => [...prev, { id: `s-${Date.now()}`, role: 'system', text: 'Could not capture the preview (canvas is empty or blocked).' }]);
+    }
+  }, []);
+
+  const handleCleanContext = useCallback(() => {
+    setMessages([]);
+    setShowCleanModal(false);
+  }, []);
+
+  const handleRestoreVersion = useCallback((version) => {
+    setFilesByProject(prev => ({
+      ...prev,
+      [projectId]: { ...prev[projectId], contents: version.contents },
+    }));
+    setVersionsByProject(prev => ({
+      ...prev,
+      [projectId]: [
+        { id: `v-${Date.now()}`, label: `Restored: ${version.label}`, timestamp: Date.now(), contents: version.contents },
+        ...(prev[projectId] || []),
+      ],
+    }));
+    setShowHistoryModal(false);
+  }, [projectId]);
+
+  const handlePublish = useCallback(async () => {
+    setIsPublishing(true);
+    try {
+      const response = await fetch(PUBLISH_API_PATH, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          projectKey: projectId,
+          projectName: project.name,
+          projectType: project.type,
+          files: projectFiles.contents,
+        }),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.error || 'Publish failed.');
+      setPublishedByProject(prev => ({ ...prev, [projectId]: { slug: data.slug, publishedAt: data.publishedAt } }));
+      setShowPublishModal(true);
+      setShowShareModal(false);
+    } catch (err) {
+      setMessages(prev => [...prev, { id: `s-${Date.now()}`, role: 'system', text: `Publish failed: ${err.message}` }]);
+    } finally {
+      setIsPublishing(false);
+    }
+  }, [projectId, project, projectFiles]);
+
+  const runAssistantResponse = useCallback(async (currentProject, userPrompt, attachment) => {
     setIsGenerating(true);
     setLastBuildError(null);
     const id = `a-${Date.now()}`;
@@ -1733,6 +2198,8 @@ export default function KilnApp() {
           files: currentFiles.files,
           temperature: 0.45,
           maxTokens: 3000,
+          model: selectedModel,
+          image: attachment || undefined,
         }),
       });
 
@@ -1782,8 +2249,16 @@ export default function KilnApp() {
         ...prev,
         [currentProject.id]: { ...prev[currentProject.id], contents: nextContents },
       }));
+      const editLabel = `Applied ${[...new Set(editsMade)].join(', ')}`;
+      setVersionsByProject(prev => ({
+        ...prev,
+        [currentProject.id]: [
+          { id: `v-${Date.now()}`, label: editLabel, timestamp: Date.now(), contents: nextContents },
+          ...(prev[currentProject.id] || []),
+        ],
+      }));
       touchedFile = editsMade[0];
-      bump(`Applied ${[...new Set(editsMade)].join(', ')}`);
+      bump(editLabel);
       await pace();
       bump('Reloaded the live preview from the saved game definition');
 
@@ -1806,12 +2281,19 @@ export default function KilnApp() {
 
   const handleSend = useCallback((text) => {
     const trimmed = (text ?? input).trim();
-    if (!trimmed || isGenerating) return;
-    setMessages(prev => [...prev, { id: `u-${Date.now()}`, role: 'user', text: trimmed }]);
+    if ((!trimmed && !pendingAttachment) || isGenerating) return;
+    setMessages(prev => [...prev, {
+      id: `u-${Date.now()}`,
+      role: 'user',
+      text: trimmed || 'Take a look at this image.',
+      attachment: pendingAttachment,
+    }]);
     setInput('');
+    const attachment = pendingAttachment;
+    setPendingAttachment(null);
     setChatOpenMobile(true);
-    runAssistantResponse(project, trimmed);
-  }, [input, isGenerating, runAssistantResponse, project]);
+    runAssistantResponse(project, trimmed || 'Take a look at this image and suggest an edit.', attachment);
+  }, [input, isGenerating, runAssistantResponse, project, pendingAttachment]);
 
   const handleAssetLog = useCallback((label) => {
     setMessages(prev => {
@@ -1880,17 +2362,67 @@ export default function KilnApp() {
               <span className="text-stone-500">· {formatMetricCount(sessionUsage.totalTokens)} tokens</span>
             )}
           </div>
-          <button className="hidden sm:flex text-sm px-3 py-1.5 rounded-md border border-stone-700 text-stone-300 hover:bg-stone-800 items-center gap-1.5">
+          <button
+            onClick={() => setShowShareModal(true)}
+            className="hidden sm:flex text-sm px-3 py-1.5 rounded-md border border-stone-700 text-stone-300 hover:bg-stone-800 items-center gap-1.5"
+          >
             <Share2 size={14} /> Share
           </button>
-          <button className="text-sm px-3 py-1.5 rounded-md bg-amber-500 text-stone-950 font-medium hover:bg-amber-400">
+          <button
+            onClick={() => setShowPublishModal(true)}
+            className="text-sm px-3 py-1.5 rounded-md bg-amber-500 text-stone-950 font-medium hover:bg-amber-400"
+          >
             Publish
           </button>
-          <button className="h-8 w-8 rounded-full bg-stone-800 flex items-center justify-center text-stone-400">
-            <User size={15} />
-          </button>
+          <div className="relative">
+            <button
+              onClick={() => setShowAvatarMenu(v => !v)}
+              className="h-8 w-8 rounded-full bg-stone-800 flex items-center justify-center text-stone-400 hover:text-stone-200"
+            >
+              <User size={15} />
+            </button>
+            {showAvatarMenu && (
+              <>
+                <div className="fixed inset-0 z-30" onClick={() => setShowAvatarMenu(false)} />
+                <AvatarMenu
+                  sessionUsage={sessionUsage}
+                  onClose={() => setShowAvatarMenu(false)}
+                  onOpenProjects={() => setProjectOpen(true)}
+                />
+              </>
+            )}
+          </div>
         </div>
       </div>
+
+      {showCleanModal && (
+        <CleanContextModal onCancel={() => setShowCleanModal(false)} onConfirm={handleCleanContext} />
+      )}
+      {showHistoryModal && (
+        <VersionHistoryModal
+          versions={versions}
+          onClose={() => setShowHistoryModal(false)}
+          onRestore={handleRestoreVersion}
+        />
+      )}
+      {showShareModal && (
+        <ShareModal
+          onClose={() => setShowShareModal(false)}
+          publishInfo={publishInfo}
+          onPublish={handlePublish}
+          isPublishing={isPublishing}
+        />
+      )}
+      {showPublishModal && (
+        <PublishModal
+          onClose={() => setShowPublishModal(false)}
+          project={project}
+          publishInfo={publishInfo}
+          onPublish={handlePublish}
+          isPublishing={isPublishing}
+          buildError={lastBuildError}
+        />
+      )}
 
       {/* Tabs */}
       <div className="absolute top-20 right-0 z-20 w-1/2 h-20 border-b border-amber-900/40 flex shrink-0" style={{ fontFamily: "'Inter', system-ui, sans-serif" }}>
@@ -1927,6 +2459,15 @@ export default function KilnApp() {
             onSend={handleSend}
             isGenerating={isGenerating}
             onClose={() => setChatOpenMobile(false)}
+            pendingAttachment={pendingAttachment}
+            onPickFile={handlePickFile}
+            onScreenshot={handleScreenshot}
+            onRemoveAttachment={() => setPendingAttachment(null)}
+            models={models}
+            selectedModel={selectedModel}
+            onSelectModel={setSelectedModel}
+            onOpenClean={() => setShowCleanModal(true)}
+            onOpenHistory={() => setShowHistoryModal(true)}
           />
         </div>
         {chatOpenMobile && (
@@ -1934,7 +2475,9 @@ export default function KilnApp() {
         )}
 
         <div className="flex-1 min-w-0 flex min-h-0 pt-20" style={{ fontFamily: "'Inter', system-ui, sans-serif" }}>
-          {activeTab === 'preview' && <PreviewPane project={project} projectFiles={projectFiles} buildError={lastBuildError} />}
+          {activeTab === 'preview' && (
+            <PreviewPane project={project} projectFiles={projectFiles} buildError={lastBuildError} previewBoxRef={previewBoxRef} />
+          )}
           {activeTab === 'assets' && <AssetsPane assets={assets} setAssets={setAssets} onLog={handleAssetLog} />}
           {activeTab === 'code' && <CodePane project={project} projectFiles={projectFiles} lastTouchedFile={lastTouchedFile} />}
         </div>

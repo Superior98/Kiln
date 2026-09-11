@@ -14,7 +14,29 @@ const PREFERRED_MODELS = [
   "moonshotai/kimi-k2-instruct",
 ];
 
+// Only some Groq models accept image input. If the user attaches a
+// screenshot or upload, we route to this one regardless of the
+// selected/preferred text model.
+const VISION_MODEL = "meta-llama/llama-4-scout-17b-16e-instruct";
+
 let modelCache: { model: string; expiresAt: number } | null = null;
+let availableModelsCache: { models: string[]; expiresAt: number } | null = null;
+
+async function listAvailableGroqModels(apiKey: string): Promise<string[]> {
+  if (availableModelsCache && availableModelsCache.expiresAt > Date.now()) {
+    return availableModelsCache.models;
+  }
+  const response = await fetch(GROQ_MODELS_ENDPOINT, {
+    headers: { Authorization: `Bearer ${apiKey}` },
+  });
+  const data = (await response.json()) as { data?: Array<{ id?: string; active?: boolean }> };
+  if (!response.ok) return PREFERRED_MODELS;
+  const models = (data.data ?? [])
+    .filter((item) => item.active !== false && typeof item.id === "string")
+    .map((item) => item.id as string);
+  availableModelsCache = { models, expiresAt: Date.now() + MODEL_CACHE_TTL_MS };
+  return models;
+}
 
 async function resolveGroqModel(apiKey: string) {
   if (modelCache && modelCache.expiresAt > Date.now()) {
@@ -64,6 +86,8 @@ type AssistantRequest = {
   };
   currentGame?: unknown;
   files?: unknown;
+  model?: unknown;
+  image?: unknown;
 };
 
 type GroqUsage = {
@@ -210,6 +234,26 @@ function parseBuildReply(reply: string, fallbackTitle: string) {
   }
 }
 
+router.get("/assistant/models", async (req, res) => {
+  const apiKey = process.env.GROQ_API_KEY;
+  if (!apiKey) {
+    res.status(503).json({ error: "Groq is not configured on the server." });
+    return;
+  }
+  try {
+    const available = await listAvailableGroqModels(apiKey);
+    const ranked = PREFERRED_MODELS.filter((m) => available.includes(m));
+    const rest = available.filter((m) => !ranked.includes(m));
+    res.json({
+      models: [...ranked, ...rest].map((id, index) => ({ id, best: index === 0 })),
+      visionModel: VISION_MODEL,
+    });
+  } catch (error) {
+    req.log.error({ err: error }, "Failed to list Groq models");
+    res.status(502).json({ error: "Unable to reach Groq right now." });
+  }
+});
+
 router.post("/assistant", async (req, res) => {
   const body = req.body as AssistantRequest;
 
@@ -235,8 +279,22 @@ router.post("/assistant", async (req, res) => {
       ? Math.min(Math.max(Math.floor(body.maxTokens), 1), 8192)
       : body.mode === "build" ? 3000 : 200;
 
+  const hasImage = typeof body.image === "string" && body.image.startsWith("data:image/");
+  const requestedModel = typeof body.model === "string" ? body.model : null;
+
   try {
-    const model = await resolveGroqModel(apiKey);
+    let model: string;
+    if (hasImage) {
+      // Vision requests always go to the vision-capable model, regardless
+      // of what's selected in the picker — most Groq text models will
+      // simply error out on image content.
+      model = VISION_MODEL;
+    } else if (requestedModel) {
+      const available = await listAvailableGroqModels(apiKey);
+      model = available.includes(requestedModel) ? requestedModel : await resolveGroqModel(apiKey);
+    } else {
+      model = await resolveGroqModel(apiKey);
+    }
     const isBuild = body.mode === "build";
     const projectName =
       typeof body.project?.name === "string" ? body.project.name : "Untitled Game";
@@ -257,6 +315,13 @@ router.post("/assistant", async (req, res) => {
           `User request: ${body.prompt.trim()}`,
         ].join("\n")
       : body.prompt.trim();
+    const messageContent = hasImage
+      ? [
+          { type: "text", text: prompt },
+          { type: "image_url", image_url: { url: body.image as string } },
+        ]
+      : prompt;
+
     const requestStartedAt = Date.now();
     const upstream = await fetch(GROQ_ENDPOINT, {
       method: "POST",
@@ -266,7 +331,7 @@ router.post("/assistant", async (req, res) => {
       },
       body: JSON.stringify({
         model,
-        messages: [{ role: "user", content: prompt }],
+        messages: [{ role: "user", content: messageContent }],
         temperature,
         max_tokens: maxTokens,
       }),
