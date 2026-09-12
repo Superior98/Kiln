@@ -45,15 +45,41 @@ app and see it work would be high-risk.
    module via temporary test-only exports (not committed) — I have no way to call
    the real Groq API from outside Replit, so actual generation *quality* with this
    new prompt is still unverified and should be the first thing tested live.
-3. **Wire the sandbox into `PreviewPane`** behind a per-project mode, so schema-based
-   projects keep working exactly as they do today while new projects (or ones
-   explicitly migrated) run through the code path instead. This is also where the
-   client's per-project file whitelist (`PROJECT_FILES` in `KilnApp.jsx`) needs a
-   `game.js` entry added for any project that opts into code mode, and where
-   `runAssistantResponse` needs to send `responseFormat: "code"` / `currentCode` and
-   handle the response shape from phase 2 instead of assuming `data.game` always
-   exists.
+3. **Wire the sandbox into `PreviewPane`** (done). A per-project "Code mode"
+   toggle (2D projects only) in the chat composer controls what NEW requests
+   ask Ember for (`responseFormat: "code"` + `currentCode` + asset names, vs
+   the schema payload). The *preview*, separately, renders `CodeSandbox`
+   purely based on whether the project's `game.js` has real content - not the
+   toggle - so files stay the single source of truth and the two can't drift
+   out of sync. `game.js` was added to Ember Runner's and Bramble Maze's file
+   whitelist (inert until populated; Skyward Drift/3D deliberately excluded,
+   since the sandbox is canvas-only). Added `WinLoseOverlay` (shown on
+   `kiln:win`/`kiln:lose`, with a "Play again" button using `restartSignal`
+   to remount just the iframe) and routed sandbox runtime errors into the
+   same `renderError`/`UnavailablePreview` path Preview3D's WebGL errors
+   already used. Verified via full syntax check + a full production build
+   (1677 modules, `code-sandbox.tsx` now genuinely bundled and used) plus a
+   careful line-by-line diff review - this file isn't covered by `tsc`
+   (no allowJs/checkJs), and there was no way to test in an actual running
+   browser from the sandbox this was built in, so **this is the first thing
+   worth actually playing with live** to confirm the wiring behaves as
+   designed, not just as reasoned through.
 4. **Migrate or dual-support** the three existing demo projects.
+
+**Known, deliberate limitations to fix later, not block on:**
+- The preview's play/pause button only dims the sandboxed iframe visually;
+  it doesn't truly pause execution. A real pause needs a parent-to-iframe
+  message channel (CodeSandbox currently only listens, never sends).
+- Code mode is 2D-only. 3D would need a separate Three.js-aware harness.
+- Only images are bridged into the sandbox (`Kiln.assets`). Audio assets
+  exist in AssetsPane but have no `Kiln.playSound`-type equivalent yet.
+- No `@`-mention UI for referencing assets by name in the chat input yet -
+  Ember knows asset names exist (see the "Ember prompt-level asset
+  awareness" commit) but the person has to type the exact name themselves.
+- Only one file (`game.js`) is supported per code-mode project - real
+  multi-file editing would need either in-browser bundling or a deliberate
+  single-file-merge strategy; MAX_CODE_FILES is hardcoded to 1 in
+  `assistant.ts` for exactly this reason.
 
 **How to apply:** Don't skip straight to phase 2/3 without the harness from phase 1
 in place and tested — it's the isolation boundary everything else assumes exists.
