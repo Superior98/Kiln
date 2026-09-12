@@ -64,7 +64,11 @@ app and see it work would be high-risk.
    browser from the sandbox this was built in, so **this is the first thing
    worth actually playing with live** to confirm the wiring behaves as
    designed, not just as reasoned through.
-4. **Migrate or dual-support** the three existing demo projects.
+4. **Migrate or dual-support** the three existing demo projects. Ember Runner is
+   done (real, hand-written `game.js` with actual physics, a patrolling enemy,
+   collectibles, and a working finish line - see the "Seed Ember Runner with a
+   real, playable game.js" commit). Bramble Maze and Skyward Drift (3D) are
+   still schema-only.
 
 **Known, deliberate limitations to fix later, not block on:**
 - The preview's play/pause button only dims the sandboxed iframe visually;
