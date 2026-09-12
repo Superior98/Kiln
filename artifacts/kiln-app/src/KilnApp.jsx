@@ -129,7 +129,178 @@ files directly.`,
     { "x": 350, "y": 325, "size": 12, "color": "#38bdf8" },
     { "x": 680, "y": 245, "size": 12, "color": "#38bdf8" }
   ]
-}`
+}`,
+      'game.js':
+`// Ember Runner — a real, playable platformer running on the Kiln
+// sandbox API (see code-sandbox.tsx). Matches the layout and colors of
+// the original game.json seed, but with genuine physics, a working
+// finish line, and win/lose conditions instead of static shapes.
+
+const WORLD = { w: 960, h: 540 };
+const GRAVITY = 1400;
+const GROUND_Y = 470;
+
+const player = {
+  x: 120, y: 390, w: 28, h: 40,
+  vx: 0, vy: 0,
+  speed: 260, jumpVelocity: 480,
+  grounded: false,
+  color: '#f59e0b',
+};
+
+const platforms = [
+  { x: 0, y: GROUND_Y, w: 960, h: 70, color: '#292524' },
+  { x: 270, y: 365, w: 180, h: 22, color: '#57534e' },
+  { x: 600, y: 285, w: 180, h: 22, color: '#57534e' },
+];
+
+const enemy = {
+  x: 470, y: GROUND_Y - 18, w: 18, h: 18,
+  minX: 470, maxX: 620, dir: 1, speed: 60,
+  color: '#ef4444',
+};
+
+const collectibles = [
+  { x: 350, y: 325, size: 12, color: '#38bdf8', collected: false },
+  { x: 680, y: 245, size: 12, color: '#38bdf8', collected: false },
+];
+
+const finish = { x: 880, y: GROUND_Y - 60, w: 20, h: 60, color: '#22c55e' };
+
+let score = 0;
+let gameOver = false;
+
+function rectsOverlap(a, b) {
+  return a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y;
+}
+
+function update(dt) {
+  if (gameOver) return;
+
+  // Horizontal movement.
+  player.vx = 0;
+  if (Kiln.isKeyDown('arrowleft') || Kiln.isKeyDown('a')) player.vx = -player.speed;
+  if (Kiln.isKeyDown('arrowright') || Kiln.isKeyDown('d')) player.vx = player.speed;
+  player.x += player.vx * dt;
+  player.x = Math.max(0, Math.min(WORLD.w - player.w, player.x));
+
+  // Jump.
+  if ((Kiln.isKeyDown(' ') || Kiln.isKeyDown('arrowup') || Kiln.isKeyDown('w')) && player.grounded) {
+    player.vy = -player.jumpVelocity;
+    player.grounded = false;
+  }
+
+  // Gravity + vertical movement.
+  player.vy += GRAVITY * dt;
+  player.y += player.vy * dt;
+
+  // Platform collision (resolve vertical only - this game has no walls
+  // to run into sideways, only platforms to land on).
+  player.grounded = false;
+  for (const p of platforms) {
+    const withinX = player.x + player.w > p.x && player.x < p.x + p.w;
+    const wasAbove = player.y + player.h - player.vy * dt <= p.y + 1;
+    if (withinX && player.vy >= 0 && wasAbove && player.y + player.h >= p.y && player.y + player.h <= p.y + p.h + 20) {
+      player.y = p.y - player.h;
+      player.vy = 0;
+      player.grounded = true;
+    }
+  }
+
+  // Falling into a pit past the bottom of the world is a loss.
+  if (player.y > WORLD.h + 100) {
+    gameOver = true;
+    Kiln.lose();
+    return;
+  }
+
+  // Enemy patrol.
+  enemy.x += enemy.dir * enemy.speed * dt;
+  if (enemy.x < enemy.minX) { enemy.x = enemy.minX; enemy.dir = 1; }
+  if (enemy.x > enemy.maxX) { enemy.x = enemy.maxX; enemy.dir = -1; }
+
+  // Touching the enemy is a loss.
+  if (rectsOverlap(player, enemy)) {
+    gameOver = true;
+    Kiln.lose();
+    return;
+  }
+
+  // Collectibles.
+  for (const c of collectibles) {
+    if (c.collected) continue;
+    const cBox = { x: c.x - c.size, y: c.y - c.size, w: c.size * 2, h: c.size * 2 };
+    if (rectsOverlap(player, cBox)) {
+      c.collected = true;
+      score += 10;
+      Kiln.setScore(score);
+    }
+  }
+
+  // Reaching the finish line is a win.
+  if (rectsOverlap(player, finish)) {
+    gameOver = true;
+    Kiln.win();
+    return;
+  }
+}
+
+function draw() {
+  const ctx = Kiln.ctx;
+  const w = Kiln.width;
+  const h = Kiln.height;
+  const scaleX = w / WORLD.w;
+  const scaleY = h / WORLD.h;
+
+  ctx.fillStyle = '#0c0a09';
+  ctx.fillRect(0, 0, w, h);
+
+  ctx.save();
+  ctx.scale(scaleX, scaleY);
+
+  for (const p of platforms) {
+    ctx.fillStyle = p.color;
+    ctx.fillRect(p.x, p.y, p.w, p.h);
+  }
+
+  ctx.fillStyle = finish.color;
+  ctx.fillRect(finish.x, finish.y, finish.w, finish.h);
+  ctx.fillStyle = '#f59e0b';
+  ctx.beginPath();
+  ctx.moveTo(finish.x + finish.w, finish.y);
+  ctx.lineTo(finish.x + finish.w + 22, finish.y + 10);
+  ctx.lineTo(finish.x + finish.w, finish.y + 20);
+  ctx.closePath();
+  ctx.fill();
+
+  for (const c of collectibles) {
+    if (c.collected) continue;
+    ctx.fillStyle = c.color;
+    ctx.beginPath();
+    ctx.arc(c.x, c.y, c.size, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  ctx.fillStyle = enemy.color;
+  ctx.fillRect(enemy.x, enemy.y, enemy.w, enemy.h);
+
+  ctx.fillStyle = player.color;
+  ctx.fillRect(player.x, player.y, player.w, player.h);
+
+  ctx.restore();
+
+  ctx.fillStyle = '#f59e0b';
+  ctx.font = '16px monospace';
+  ctx.fillText('Score: ' + score, 14, 24);
+}
+
+Kiln.onFrame(function (dt) {
+  update(dt);
+  draw();
+});
+
+Kiln.ready();
+`
     }
   },
 
