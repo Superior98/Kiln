@@ -5,8 +5,9 @@ import {
   Maximize2, Smartphone, Monitor, Code2, Image as ImageIcon,
   Upload, Search, CheckCircle2, AlertTriangle,
   ChevronDown, X, Menu, Wand2, Share2, Zap, User, FileCode2,
-  RotateCw, Download, MessageSquare, ExternalLink
+  RotateCw, Download, MessageSquare, ExternalLink, Trophy, Skull
 } from 'lucide-react';
+import { CodeSandbox } from './components/code-sandbox.tsx';
 
 /* ---------------------------------------------------------------
    Projects — each one owns its own file set, asset set, and
@@ -47,7 +48,7 @@ const CONFIG_3D = {
 
 const PROJECT_FILES = {
   'ember-runner': {
-    files: ['engine.js', 'player.js', 'level.js', 'config.js', 'README.md', 'game.json'],
+    files: ['engine.js', 'player.js', 'level.js', 'config.js', 'README.md', 'game.json', 'game.js'],
     contents: {
       'engine.js':
 `import { World } from 'physics';
@@ -317,7 +318,7 @@ you host yourself before this leaves the prototype stage.`
   },
 
   'bramble-maze': {
-    files: ['maze.js', 'player.js', 'config.js', 'README.md', 'game.json'],
+    files: ['maze.js', 'player.js', 'config.js', 'README.md', 'game.json', 'game.js'],
     contents: {
       'maze.js':
 `// Generates a random maze using recursive backtracking.
@@ -1218,7 +1219,31 @@ function UnavailablePreview({ message, onRetry }) {
   );
 }
 
-function PreviewPane({ project, projectFiles, buildError, previewBoxRef }) {
+function WinLoseOverlay({ outcome, onPlayAgain }) {
+  const isWin = outcome === 'win';
+  return (
+    <div className="absolute inset-0 flex flex-col items-center justify-center bg-black/75 backdrop-blur-sm text-center px-6 z-10">
+      {isWin
+        ? <Trophy size={40} strokeWidth={1.8} className="text-amber-400 mb-4" />
+        : <Skull size={40} strokeWidth={1.8} className="text-stone-400 mb-4" />}
+      <p
+        className={`text-xl md:text-2xl mb-5 ${isWin ? 'text-amber-300' : 'text-stone-200'}`}
+        style={{ fontFamily: "'IBM Plex Mono', monospace" }}
+      >
+        {isWin ? 'You win!' : 'Game over'}
+      </p>
+      <button
+        onClick={onPlayAgain}
+        className="px-4 py-2 rounded-lg border border-stone-700 text-stone-300 hover:border-amber-500/60 hover:text-amber-300 transition-colors flex items-center gap-2"
+        style={{ fontFamily: "'IBM Plex Mono', monospace" }}
+      >
+        <RotateCw size={14} /> Play again
+      </button>
+    </div>
+  );
+}
+
+function PreviewPane({ project, projectFiles, assets, buildError, previewBoxRef }) {
   const [isPlaying, setIsPlaying] = useState(true);
   const [device, setDevice] = useState('desktop');
   const [isFullscreen, setIsFullscreen] = useState(false);
@@ -1230,21 +1255,33 @@ function PreviewPane({ project, projectFiles, buildError, previewBoxRef }) {
   }, []);
   // Local error state, but it is only ever set by a real failure:
   // either a build error bubbled up from KilnApp (a failed
-  // generation) or a runtime failure thrown by Preview3D itself
-  // (e.g. WebGL unavailable). There is no manual toggle for this.
+  // generation) or a runtime failure thrown by Preview3D/CodeSandbox
+  // itself (e.g. WebGL unavailable, or a generated-code crash). There
+  // is no manual toggle for this.
   const [renderError, setRenderError] = useState(null);
+  const [outcome, setOutcome] = useState(null); // null | 'win' | 'lose', code-mode only
+  const [restartNonce, setRestartNonce] = useState(0);
   const is3D = project.type === '3D';
   const gameSpec = useMemo(
     () => parseGameSpec(projectFiles, project.name),
     [projectFiles, project.name],
   );
+  // A project is in "real code" mode purely based on whether it has
+  // real game.js content - not a request-time toggle (see codeMode in
+  // KilnApp), so the preview always reflects the files that actually
+  // exist rather than a setting that could drift out of sync with them.
+  const codeContent = projectFiles.contents['game.js'];
+  const hasCode = !is3D && typeof codeContent === 'string' && codeContent.trim().length > 0;
 
-  useEffect(() => { setRenderError(null); }, [project.id]);
+  useEffect(() => { setRenderError(null); setOutcome(null); }, [project.id]);
+  useEffect(() => { setOutcome(null); }, [codeContent]);
 
   const activeError = buildError || renderError;
 
   const caption = activeError
     ? `Build error: ${activeError}`
+    : hasCode
+    ? 'Live runtime — running real game.js in a sandboxed iframe.'
     : `Live ${gameSpec.kind} runtime — the preview reads game.json after every applied Ember change.`;
 
   return (
@@ -1293,6 +1330,16 @@ function PreviewPane({ project, projectFiles, buildError, previewBoxRef }) {
         >
           {activeError ? (
             <UnavailablePreview message={activeError} onRetry={() => setRenderError(null)} />
+          ) : hasCode ? (
+            <CodeSandbox
+              code={codeContent}
+              assets={assets}
+              restartSignal={restartNonce}
+              running={isPlaying}
+              onError={setRenderError}
+              onWin={() => setOutcome('win')}
+              onLose={() => setOutcome('lose')}
+            />
           ) : is3D ? (
             <Preview3D isPlaying={isPlaying} onError={setRenderError} gameSpec={gameSpec} />
           ) : (
@@ -1303,7 +1350,13 @@ function PreviewPane({ project, projectFiles, buildError, previewBoxRef }) {
               {project.name}
             </span>
           </div>
-          {!activeError && (
+          {outcome && (
+            <WinLoseOverlay
+              outcome={outcome}
+              onPlayAgain={() => { setOutcome(null); setRestartNonce(n => n + 1); }}
+            />
+          )}
+          {!activeError && !outcome && (
             <button
               onClick={() => setIsPlaying(p => !p)}
               className="absolute inset-0 flex items-center justify-center group"
@@ -1813,6 +1866,7 @@ function ChatPanel({
   project, messages, input, setInput, onSend, isGenerating, onClose,
   pendingAttachment, onPickFile, onScreenshot, onRemoveAttachment,
   models, selectedModel, onSelectModel, onOpenClean, onOpenHistory,
+  codeMode, onToggleCodeMode,
 }) {
   const scrollRef = useRef(null);
   const fileInputRef = useRef(null);
@@ -1958,23 +2012,40 @@ function ChatPanel({
           </button>
         </div>
         <div className="flex items-center justify-between mt-2 px-0.5">
-          <div className="relative">
-            <button
-              onClick={() => setShowModelMenu((v) => !v)}
-              className="text-[11px] px-2 py-1 rounded-md border border-stone-800 text-stone-500 flex items-center gap-1 hover:border-stone-700 hover:text-stone-300"
-            >
-              {selectedModel} <ChevronDown size={11} />
-            </button>
-            {showModelMenu && (
-              <>
-                <div className="fixed inset-0 z-30" onClick={() => setShowModelMenu(false)} />
-                <ModelMenu
-                  models={models}
-                  selectedModel={selectedModel}
-                  onSelect={onSelectModel}
-                  onClose={() => setShowModelMenu(false)}
-                />
-              </>
+          <div className="flex items-center gap-1.5">
+            <div className="relative">
+              <button
+                onClick={() => setShowModelMenu((v) => !v)}
+                className="text-[11px] px-2 py-1 rounded-md border border-stone-800 text-stone-500 flex items-center gap-1 hover:border-stone-700 hover:text-stone-300"
+              >
+                {selectedModel} <ChevronDown size={11} />
+              </button>
+              {showModelMenu && (
+                <>
+                  <div className="fixed inset-0 z-30" onClick={() => setShowModelMenu(false)} />
+                  <ModelMenu
+                    models={models}
+                    selectedModel={selectedModel}
+                    onSelect={onSelectModel}
+                    onClose={() => setShowModelMenu(false)}
+                  />
+                </>
+              )}
+            </div>
+            {project.type === '2D' && (
+              <button
+                onClick={onToggleCodeMode}
+                title={codeMode
+                  ? 'Ember will write real game.js code for new requests'
+                  : 'Ember will fill in the game.json schema for new requests'}
+                className={`text-[11px] px-2 py-1 rounded-md border flex items-center gap-1 transition-colors ${
+                  codeMode
+                    ? 'border-amber-600/60 bg-amber-500/10 text-amber-300'
+                    : 'border-stone-800 text-stone-500 hover:border-stone-700 hover:text-stone-300'
+                }`}
+              >
+                <Code2 size={11} /> Code mode {codeMode ? 'on' : 'off'}
+              </button>
             )}
           </div>
           <div className="flex items-center gap-2.5 text-stone-600">
@@ -2035,6 +2106,16 @@ export default function KilnApp() {
   const [filesByProject, setFilesByProject] = useState(loadProjectFiles);
   const [lastBuildError, setLastBuildError] = useState(null);
   const [lastTouchedFile, setLastTouchedFile] = useState(null);
+  // Per-project opt-in: when on, new Ember requests ask for real game.js
+  // code (see the "code" responseFormat on the server) instead of the
+  // fixed game.json schema. The *preview*, separately, always renders
+  // whichever one the project actually has real content for - see
+  // PreviewPane - so turning this off again doesn't retroactively hide
+  // code a project has already adopted.
+  const [codeModeByProject, setCodeModeByProject] = useState(() => {
+    try { return JSON.parse(window.localStorage.getItem('kiln-code-mode-v1') || '{}'); }
+    catch { return {}; }
+  });
 
   // New, previously-decorative controls: attachments, model choice,
   // version history, and the share/publish flow.
@@ -2063,6 +2144,10 @@ export default function KilnApp() {
   }, [publishedByProject]);
 
   useEffect(() => {
+    window.localStorage.setItem('kiln-code-mode-v1', JSON.stringify(codeModeByProject));
+  }, [codeModeByProject]);
+
+  useEffect(() => {
     fetch(MODELS_API_PATH)
       .then((res) => (res.ok ? res.json() : null))
       .then((data) => {
@@ -2089,6 +2174,10 @@ export default function KilnApp() {
   const projectFiles = filesByProject[projectId];
   const versions = versionsByProject[projectId] || [];
   const publishInfo = publishedByProject[projectId] || null;
+  const codeMode = !!codeModeByProject[projectId];
+  const toggleCodeMode = useCallback(() => {
+    setCodeModeByProject(prev => ({ ...prev, [projectId]: !prev[projectId] }));
+  }, [projectId]);
 
   // Switching projects clears in-flight chat state so a 2D work log
   // doesn't linger while looking at a 3D project, and vice versa.
@@ -2177,6 +2266,11 @@ export default function KilnApp() {
     setLastBuildError(null);
     const id = `a-${Date.now()}`;
     const currentFiles = filesByProject[currentProject.id];
+    const currentAssets = assetsByProject[currentProject.id] || [];
+    // Code mode only applies to 2D projects - the sandbox that actually
+    // runs game.js is canvas-only (see code-sandbox.tsx). A 3D project
+    // always uses the schema path regardless of the stored toggle value.
+    const useCodeMode = currentProject.type === '2D' && !!codeModeByProject[currentProject.id];
 
     // Step 1 of the real work log: what Ember actually has open.
     // This is the true file list for this project, not a placeholder.
@@ -2197,13 +2291,26 @@ export default function KilnApp() {
     try {
       await pace();
 
-      bump('Asking Ember to generate a playable game definition');
+      bump(useCodeMode
+        ? 'Asking Ember to write real game code'
+        : 'Asking Ember to generate a playable game definition');
       await pace();
 
       const response = await fetch(ASSISTANT_API_PATH, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
+        body: JSON.stringify(useCodeMode ? {
+          mode: 'build',
+          responseFormat: 'code',
+          prompt: userPrompt,
+          project: { name: currentProject.name, type: currentProject.type },
+          currentCode: currentFiles.contents['game.js'] || '',
+          assets: currentAssets.map(a => ({ name: a.name, isImage: a.isImage })),
+          temperature: 0.45,
+          maxTokens: 3000,
+          model: selectedModel,
+          image: attachment || undefined,
+        } : {
           mode: 'build',
           prompt: userPrompt,
           project: { name: currentProject.name, type: currentProject.type },
@@ -2229,7 +2336,7 @@ export default function KilnApp() {
       }
 
       const generatedFiles = Array.isArray(data.files) ? data.files : [];
-      if (!generatedFiles.length || !data.game) {
+      if (!generatedFiles.length || (!useCodeMode && !data.game)) {
         throw new Error('Ember did not return an applicable game change.');
       }
       bump(`Validated ${generatedFiles.map(file => file.path).join(', ')}`);
@@ -2273,11 +2380,11 @@ export default function KilnApp() {
       touchedFile = editsMade[0];
       bump(editLabel);
       await pace();
-      bump('Reloaded the live preview from the saved game definition');
+      bump(useCodeMode ? 'Reloaded the live preview from the updated code' : 'Reloaded the live preview from the saved game definition');
 
       const suggestionList = SUGGESTIONS[currentProject.type] || [];
       suggestion = suggestionList[Math.floor(Math.random() * suggestionList.length)] || null;
-      replyText = data.summary?.trim() || data.reply?.trim() || `Built ${data.game.title}.`;
+      replyText = data.summary?.trim() || data.reply?.trim() || (useCodeMode ? 'Updated the game code.' : `Built ${data.game.title}.`);
     } catch (err) {
       bump(`Error: ${err.message}`);
       replyText = `Ember hit a snag: ${err.message}`;
@@ -2290,7 +2397,7 @@ export default function KilnApp() {
     ));
     if (touchedFile) setLastTouchedFile(touchedFile);
     setIsGenerating(false);
-  }, [filesByProject]);
+  }, [filesByProject, assetsByProject, codeModeByProject, selectedModel]);
 
   const handleSend = useCallback((text) => {
     const trimmed = (text ?? input).trim();
@@ -2481,6 +2588,8 @@ export default function KilnApp() {
             onSelectModel={setSelectedModel}
             onOpenClean={() => setShowCleanModal(true)}
             onOpenHistory={() => setShowHistoryModal(true)}
+            codeMode={codeMode}
+            onToggleCodeMode={toggleCodeMode}
           />
         </div>
         {chatOpenMobile && (
@@ -2489,7 +2598,7 @@ export default function KilnApp() {
 
         <div className="flex-1 min-w-0 flex min-h-0 pt-20" style={{ fontFamily: "'Inter', system-ui, sans-serif" }}>
           {activeTab === 'preview' && (
-            <PreviewPane project={project} projectFiles={projectFiles} buildError={lastBuildError} previewBoxRef={previewBoxRef} />
+            <PreviewPane project={project} projectFiles={projectFiles} assets={assets} buildError={lastBuildError} previewBoxRef={previewBoxRef} />
           )}
           {activeTab === 'assets' && <AssetsPane assets={assets} setAssets={setAssets} onLog={handleAssetLog} />}
           {activeTab === 'code' && <CodePane project={project} projectFiles={projectFiles} lastTouchedFile={lastTouchedFile} />}
