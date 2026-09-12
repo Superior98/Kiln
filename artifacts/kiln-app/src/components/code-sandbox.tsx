@@ -198,6 +198,7 @@ const HARNESS_TEMPLATE = `<!doctype html>
   };
 
   var canvas = document.getElementById("kiln-canvas");
+  var ctx = canvas.getContext("2d");
   var readyCalled = false;
   var wonOrLost = false;
 
@@ -205,6 +206,13 @@ const HARNESS_TEMPLATE = `<!doctype html>
     var dpr = window.devicePixelRatio || 1;
     canvas.width = Math.max(1, Math.floor(canvas.clientWidth * dpr));
     canvas.height = Math.max(1, Math.floor(canvas.clientHeight * dpr));
+    // Scale drawing operations to CSS pixels so generated code can draw
+    // in the same 0..Kiln.width / 0..Kiln.height coordinate space
+    // regardless of device pixel ratio, while the backing store still
+    // renders at full native resolution for sharpness. Resizing the
+    // canvas resets any existing transform, so this has to be re-applied
+    // every time, not just once at startup.
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   }
   window.addEventListener("resize", resize);
   resize();
@@ -226,7 +234,7 @@ const HARNESS_TEMPLATE = `<!doctype html>
   var frameCallback = null;
   window.Kiln = {
     canvas: canvas,
-    ctx: canvas.getContext("2d"),
+    ctx: ctx,
     get width() { return canvas.clientWidth; },
     get height() { return canvas.clientHeight; },
     isKeyDown: function (key) { return !!keys[String(key).toLowerCase()]; },
