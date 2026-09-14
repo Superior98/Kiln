@@ -2037,18 +2037,79 @@ function ChatPanel({
   project, messages, input, setInput, onSend, isGenerating, onClose,
   pendingAttachment, onPickFile, onScreenshot, onRemoveAttachment,
   models, selectedModel, onSelectModel, onOpenClean, onOpenHistory,
-  codeMode, onToggleCodeMode,
+  codeMode, onToggleCodeMode, assets,
 }) {
   const scrollRef = useRef(null);
   const fileInputRef = useRef(null);
+  const textareaRef = useRef(null);
   const [showModelMenu, setShowModelMenu] = useState(false);
   const starters = STARTER_PROMPTS[project.type];
+  // @-mention autocomplete for referencing real project assets by name.
+  // Purely a client-side typing convenience - Ember already gets the
+  // full asset name list in the prompt regardless of how the text is
+  // written (see describeAssetsForPrompt on the server); this just
+  // helps the person get the exact name right without a typo.
+  const [mention, setMention] = useState(null); // null | { start: number, query: string, selectedIndex: number }
+  const imageAssets = (assets || []).filter((a) => a.isImage);
+  const mentionMatches = mention
+    ? imageAssets.filter((a) => a.name.toLowerCase().includes(mention.query.toLowerCase())).slice(0, 6)
+    : [];
 
   useEffect(() => {
     if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
   }, [messages]);
 
+  const detectMention = (value, cursor) => {
+    const uptoCursor = value.slice(0, cursor);
+    const match = uptoCursor.match(/(?:^|\s)@([a-zA-Z0-9_.\-]*)$/);
+    if (!match) { setMention(null); return; }
+    const query = match[1];
+    const start = uptoCursor.length - query.length - 1; // include the '@'
+    setMention({ start, query, selectedIndex: 0 });
+  };
+
+  const applyMention = (assetName) => {
+    if (!mention) return;
+    const before = input.slice(0, mention.start);
+    const after = input.slice(mention.start + 1 + mention.query.length);
+    // Only add a separating space if one isn't already there - otherwise
+    // completing a mention in the middle of existing text doubles it up.
+    const needsSpace = after.length === 0 || !/^\s/.test(after);
+    const next = `${before}@${assetName}${needsSpace ? ' ' : ''}${after}`;
+    setInput(next);
+    setMention(null);
+    requestAnimationFrame(() => {
+      if (textareaRef.current) {
+        const pos = before.length + assetName.length + 1 + (needsSpace ? 1 : 0);
+        textareaRef.current.focus();
+        textareaRef.current.setSelectionRange(pos, pos);
+      }
+    });
+  };
+
   const handleKeyDown = (e) => {
+    if (mention && mentionMatches.length > 0) {
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        setMention((m) => ({ ...m, selectedIndex: (m.selectedIndex + 1) % mentionMatches.length }));
+        return;
+      }
+      if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        setMention((m) => ({ ...m, selectedIndex: (m.selectedIndex - 1 + mentionMatches.length) % mentionMatches.length }));
+        return;
+      }
+      if (e.key === 'Enter' || e.key === 'Tab') {
+        e.preventDefault();
+        applyMention(mentionMatches[mention.selectedIndex].name);
+        return;
+      }
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        setMention(null);
+        return;
+      }
+    }
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       onSend();
@@ -2152,7 +2213,7 @@ function ChatPanel({
           </div>
         )}
         <div
-          className="flex items-end gap-2 bg-stone-900 border border-stone-800 rounded-xl px-3 py-2 focus-within:border-amber-500/40"
+          className="relative flex items-end gap-2 bg-stone-900 border border-stone-800 rounded-xl px-3 py-2 focus-within:border-amber-500/40"
           onDragOver={(e) => e.preventDefault()}
           onDrop={(e) => {
             e.preventDefault();
@@ -2160,9 +2221,29 @@ function ChatPanel({
             if (file && file.type.startsWith('image/')) onPickFile(file);
           }}
         >
+          {mention && mentionMatches.length > 0 && (
+            <div className="absolute bottom-full left-0 mb-1.5 w-56 max-h-48 overflow-y-auto bg-stone-900 border border-stone-700 rounded-lg shadow-xl py-1 z-20">
+              {mentionMatches.map((a, i) => (
+                <button
+                  key={a.name}
+                  onMouseDown={(e) => { e.preventDefault(); applyMention(a.name); }}
+                  className={`w-full flex items-center gap-2 px-2.5 py-1.5 text-left text-xs ${
+                    i === mention.selectedIndex ? 'bg-amber-500/10 text-amber-300' : 'text-stone-300 hover:bg-stone-800'
+                  }`}
+                >
+                  <ImageIcon size={12} className="shrink-0 opacity-60" />
+                  <span className="truncate">{a.name}</span>
+                </button>
+              ))}
+            </div>
+          )}
           <textarea
+            ref={textareaRef}
             value={input}
-            onChange={(e) => setInput(e.target.value)}
+            onChange={(e) => {
+              setInput(e.target.value);
+              detectMention(e.target.value, e.target.selectionStart);
+            }}
             onKeyDown={handleKeyDown}
             onPaste={(e) => {
               const item = Array.from(e.clipboardData.items || []).find((i) => i.type.startsWith('image/'));
@@ -2171,7 +2252,7 @@ function ChatPanel({
             }}
             disabled={isGenerating}
             rows={1}
-            placeholder="Ask Ember… or drag, drop, or paste an image"
+            placeholder="Ask Ember… or drag, drop, or paste an image. Type @ to reference an asset"
             className="flex-1 bg-transparent text-sm text-stone-200 placeholder-stone-600 resize-none focus:outline-none max-h-24"
           />
           <button
@@ -2761,6 +2842,7 @@ export default function KilnApp() {
             onOpenHistory={() => setShowHistoryModal(true)}
             codeMode={codeMode}
             onToggleCodeMode={toggleCodeMode}
+            assets={assets}
           />
         </div>
         {chatOpenMobile && (
