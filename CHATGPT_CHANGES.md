@@ -13,8 +13,6 @@ Persistent engineering handoff for Kiln. **Agents returning to this repository s
 - Added width constraints for controls on narrow screens.
 - Updated the page description to identify Kiln as an AI-powered game creation environment.
 
-**Do not remove this viewport foundation when changing the shell.** Desktop, tablet, and mobile must remain first-class targets.
-
 ## 2026-09-14 — Bramble Maze
 
 - Continued the real playable Bramble Maze implementation.
@@ -31,21 +29,33 @@ Persistent engineering handoff for Kiln. **Agents returning to this repository s
 - The sandbox uses `sandbox="allow-scripts"`, no `allow-same-origin`, a restrictive CSP, and a narrow `Kiln` API.
 - Pause/resume is implemented through the sandbox message protocol.
 
-## 2026-09-14 — Multi-file Ember agent foundation
+## 2026-09-14 — Multi-file Ember agent integration
 
-Added `artifacts/api-server/src/routes/project-agent.ts` and registered it from `routes/index.ts`.
+The project-level agent foundation is now wired into the real Ember code-mode request path without deleting the older schema-mode path.
 
-The new `/api/assistant/project` endpoint is a real project-level coding-agent contract. It can inspect a bounded project file map and create, update, delete, and rename real files. It validates JavaScript and JSON, rejects unsafe paths, enforces size/count limits, and returns a structured operation list suitable for atomic client-side application.
+### Server
 
-Also added `artifacts/kiln-app/src/lib/project-agent.ts`, which contains the client contract and all-or-nothing operation application helper.
+- `artifacts/api-server/src/routes/project-agent.ts` exposes `/api/assistant/project`.
+- The endpoint receives the bounded project file map and assets, asks Ember for structured create/update/delete/rename operations, validates the full batch, and returns the operations atomically.
+- Generated project code is never executed on the API server.
 
-### Migration still required
+### Client
 
-The next client integration must wire the project agent into the main Ember send/apply path. Do **not** replace the existing one-file mode blindly. The intended flow is:
+- `artifacts/kiln-app/src/lib/project-agent.ts` owns the typed operation contract and atomic application helper.
+- `artifacts/kiln-app/src/lib/project-agent-bridge.ts` intercepts Ember's existing `responseFormat: "code"` request, supplies the complete current project files to the project agent, applies the returned operation batch to the real `kiln-project-files-v1` project store, and adapts the result back to the existing Ember UI contract.
+- Existing create/delete/rename operations are persisted first and trigger a clean reload so the current React file state picks up structural changes safely.
+- Pure file updates remain in-place.
+- `artifacts/kiln-app/src/main.tsx` installs the bridge at application startup.
 
-`user prompt → collect project files/assets → /api/assistant/project → validate operations → apply all operations atomically → persist project state → run preview → record changes`
+### Persistent change history
 
-The preview layer must then evolve from the current single-inline-script assumption toward a validated multi-file runtime/bundling strategy.
+- `artifacts/kiln-app/src/lib/project-history.ts` records agent, project, timestamp, summary, and per-file actions in `kiln-agent-changes-v1`.
+- `artifacts/kiln-app/src/lib/changes-dock.ts` adds a persistent in-app **Changes** dock with All / Ember / ChatGPT / Claude filters.
+- Claude's repository history remains separately documented in `CLAUDE_CHANGES.md`; it is not overwritten by the ChatGPT history.
+
+### Important runtime boundary
+
+The current preview remains the existing isolated single-entry `game.js` sandbox. The multi-file agent can now genuinely inspect and modify multiple stored project files, but the preview bundling layer still needs to be upgraded so arbitrary module imports between those files execute directly. Do not claim that arbitrary multi-module browser execution is finished until that runtime work is implemented and tested.
 
 ## 2026-09-14 — Agent handoff/change history
 
@@ -74,11 +84,9 @@ Every future agent change should record:
 9. Record meaningful changes here after completing a milestone.
 10. When replacing an architectural subsystem, leave a clear migration note and remove dead code only after the replacement is proven.
 
-## Current priority order
+## Remaining priority order
 
-1. Integrate `/api/assistant/project` into Ember's real UI request/apply flow.
-2. Add atomic multi-file project application and persistence.
-3. Upgrade preview execution so a multi-file project can actually run, not merely be stored.
-4. Add a visible Changes/Handoff section to the Kiln UI showing agent activity.
-5. Finish and test Bramble Maze end-to-end in the real preview.
-6. Add automated validation for project-agent responses and sandbox regressions.
+1. Upgrade preview execution so arbitrary multi-file project modules can actually run inside the isolated sandbox.
+2. Finish and test Bramble Maze end-to-end in the real preview.
+3. Add automated validation for project-agent responses and sandbox regressions.
+4. Replace the temporary compatibility bridge with a native multi-file request/apply path once the runtime and UI are proven.
