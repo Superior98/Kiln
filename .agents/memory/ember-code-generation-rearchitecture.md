@@ -77,13 +77,21 @@ app and see it work would be high-risk.
 - Code mode is 2D-only. 3D would need a separate Three.js-aware harness.
 - Only images are bridged into the sandbox (`Kiln.assets`). Audio assets
   exist in AssetsPane but have no `Kiln.playSound`-type equivalent yet.
-- No `@`-mention UI for referencing assets by name in the chat input yet -
-  Ember knows asset names exist (see the "Ember prompt-level asset
-  awareness" commit) but the person has to type the exact name themselves.
 - Only one file (`game.js`) is supported per code-mode project - real
   multi-file editing would need either in-browser bundling or a deliberate
   single-file-merge strategy; MAX_CODE_FILES is hardcoded to 1 in
   `assistant.ts` for exactly this reason.
+
+**Done since the phases above:**
+- Ember Runner migrated to a real, hand-written `game.js` (physics, a
+  patrolling enemy, collectibles, a working finish line) - see "Seed Ember
+  Runner with a real, playable game.js".
+- A real DPR-scaling bug in the harness was found and fixed while building
+  that demo (generated code would draw at the wrong scale on any high-DPI
+  display) - see "Fix generated code drawing in the wrong scale...".
+- `@`-mention autocomplete for referencing asset names in the chat prompt
+  (client-side typing convenience only; Ember already gets full asset
+  names regardless of prompt wording) - see "Add @-mention autocomplete...".
 
 **How to apply:** Don't skip straight to phase 2/3 without the harness from phase 1
 in place and tested — it's the isolation boundary everything else assumes exists.
