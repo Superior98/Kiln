@@ -1,0 +1,27 @@
+{
+  "schemaVersion": 1,
+  "lastUpdated": "2026-09-14",
+  "entries": [
+    {
+      "agent": "ChatGPT",
+      "date": "2026-09-14",
+      "title": "Responsive viewport foundation",
+      "files": ["artifacts/kiln-app/index.html"],
+      "summary": "Hardened the app shell for desktop, tablet and mobile viewport sizing, including dynamic viewport height, safe-area support and overflow containment."
+    },
+    {
+      "agent": "ChatGPT",
+      "date": "2026-09-14",
+      "title": "Persistent engineering handoff",
+      "files": ["CHATGPT_CHANGES.md"],
+      "summary": "Added durable handoff notes so returning coding agents can understand completed work, architectural decisions and remaining migration steps."
+    },
+    {
+      "agent": "ChatGPT",
+      "date": "2026-09-14",
+      "title": "Multi-file Ember agent foundation",
+      "files": ["artifacts/api-server/src/routes/project-agent.ts", "artifacts/api-server/src/routes/index.ts", "artifacts/kiln-app/src/lib/project-agent.ts"],
+      "summary": "Added a real project-agent API and client operation layer supporting create, update, delete and rename operations with validation and atomic client application."
+    }
+  ]
+}
