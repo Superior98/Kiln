@@ -6,12 +6,27 @@ const PROJECTS = [
   { id: 'skyward-drift', name: 'Skyward Drift', type: '3D' },
   { id: 'bramble-maze', name: 'Bramble Maze', type: '2D' },
 ] as const;
-
+const SOURCE_KEY = 'kiln-project-source-game-v1';
 let installed = false;
 
 function projectFromRequest(body: any) {
   const name = typeof body?.project?.name === 'string' ? body.project.name : '';
   return PROJECTS.find((project) => project.name === name) || PROJECTS[0];
+}
+
+function readSourceGame(projectId: string) {
+  try {
+    const saved = JSON.parse(window.localStorage.getItem(SOURCE_KEY) || '{}');
+    return typeof saved?.[projectId] === 'string' ? saved[projectId] : null;
+  } catch { return null; }
+}
+
+function writeSourceGame(projectId: string, content: string) {
+  try {
+    const saved = JSON.parse(window.localStorage.getItem(SOURCE_KEY) || '{}');
+    saved[projectId] = content;
+    window.localStorage.setItem(SOURCE_KEY, JSON.stringify(saved));
+  } catch {}
 }
 
 function readProjectFiles(projectId: string): KilnProjectFile[] {
@@ -22,7 +37,7 @@ function readProjectFiles(projectId: string): KilnProjectFile[] {
     const files = Array.isArray(project.files) ? project.files : [];
     const contents = project.contents && typeof project.contents === 'object' ? project.contents : {};
     return files.filter((path: unknown): path is string => typeof path === 'string')
-      .map((path: string) => ({ path, content: typeof contents[path] === 'string' ? contents[path] : '' }));
+      .map((path: string) => ({ path, content: path === 'game.js' ? (readSourceGame(projectId) || (typeof contents[path] === 'string' ? contents[path] : '')) : (typeof contents[path] === 'string' ? contents[path] : '') }));
   } catch { return []; }
 }
 
@@ -48,13 +63,6 @@ function resolvePath(from: string, specifier: string, files: Map<string, string>
   return [raw, `${raw}.js`, `${raw}.mjs`, `${raw}/index.js`].find((path) => files.has(path)) || null;
 }
 
-/**
- * Compatibility runtime for the existing single-script CodeSandbox.
- * Ember still edits a genuine multi-file project. When game.js imports
- * project-local modules, we compile those modules into a deterministic
- * CommonJS-style in-sandbox loader and store the generated runtime only
- * in game.js. The source modules remain real, editable project files.
- */
 function buildRuntimeEntry(files: KilnProjectFile[]) {
   const map = new Map(files.map((file) => [file.path.replace(/^\.\//, ''), file.content]));
   const entry = map.get('game.js');
@@ -62,15 +70,14 @@ function buildRuntimeEntry(files: KilnProjectFile[]) {
 
   const cache = new Map<string, string>();
   const building = new Set<string>();
-
   const transform = (path: string): string => {
     if (cache.has(path)) return cache.get(path)!;
     if (building.has(path)) throw new Error(`Circular module import detected at ${path}.`);
     const source = map.get(path);
     if (source == null) throw new Error(`Missing imported project file: ${path}`);
     building.add(path);
-
     let code = source;
+
     code = code.replace(/import\s+([\s\S]*?)\s+from\s+['"](\.[^'"]+)['"]\s*;?/g, (_m, bindings: string, spec: string) => {
       const resolved = resolvePath(path, spec, map);
       if (!resolved) throw new Error(`Cannot resolve ${spec} from ${path}.`);
@@ -78,8 +85,7 @@ function buildRuntimeEntry(files: KilnProjectFile[]) {
       const value = bindings.trim();
       if (value.startsWith('{')) {
         const inner = value.slice(1, -1).trim();
-        if (!inner) return `const __dep = require(${request});`;
-        const mapped = inner.split(',').map((part: string) => {
+        const mapped = inner.split(',').filter(Boolean).map((part: string) => {
           const bits = part.trim().split(/\s+as\s+/);
           return bits.length === 2 ? `${bits[0]}: ${bits[1]}` : part.trim();
         }).join(', ');
@@ -126,21 +132,23 @@ function buildRuntimeEntry(files: KilnProjectFile[]) {
   };
 
   const modules: Record<string, string> = {};
-  for (const path of map.keys()) {
-    if (/\.(?:js|mjs|cjs)$/.test(path)) modules[path] = transform(path);
-  }
+  for (const path of map.keys()) if (/\.(?:js|mjs|cjs)$/.test(path)) modules[path] = transform(path);
   const json = JSON.stringify(modules).replace(/<\/script/gi, '<\\/script');
   return `(function(){const __mods=${json};const __cache={};function __req(p){if(__cache[p])return __cache[p].exports;if(!__mods[p])throw new Error('Module not found: '+p);const module={exports:{}};__cache[p]=module;new Function('exports','module','require','Kiln',__mods[p])(module.exports,module,__req,window.Kiln);return module.exports;}__req('game.js');})();`;
 }
 
-function compatibleResponse(original: any, summary: string, operations: KilnProjectOperation[], currentFiles: KilnProjectFile[], projectId: string) {
+function compatibleResponse(original: any, summary: string, operations: KilnProjectOperation[], currentFiles: KilnProjectFile[], finalFiles: KilnProjectFile[], projectId: string, structuralChange: boolean) {
+  const runtimeUpdate = finalFiles.find((file) => file.path === 'game.js');
   const changedExisting = operations.filter((operation) => operation.type === 'update')
-    .map((operation) => ({ path: operation.path, content: operation.content }))
-    .filter((file) => currentFiles.some((existing) => existing.path === file.path));
-  const fallback = currentFiles.find((file) => file.path === 'game.js') || currentFiles[0];
-  const files = changedExisting.length ? changedExisting : fallback ? [fallback] : [];
+    .map((operation) => ({ path: operation.path, content: operation.content }));
+  const responseFiles = runtimeUpdate
+    ? [...changedExisting.filter((file) => file.path !== 'game.js'), { path: 'game.js', content: runtimeUpdate.content }]
+    : changedExisting.length ? changedExisting : (currentFiles[0] ? [{ path: currentFiles[0].path, content: currentFiles[0].content }] : []);
+
   recordProjectChange({ agent: 'Ember', projectId, projectName: PROJECTS.find((p) => p.id === projectId)?.name, summary, files: operationFiles(operations) });
-  return new Response(JSON.stringify({ ...original, responseFormat: 'code', summary, reply: summary, files }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+  if (structuralChange) window.setTimeout(() => window.location.reload(), 120);
+
+  return new Response(JSON.stringify({ ...original, responseFormat: 'code', summary, reply: summary, files: responseFiles }), { status: 200, headers: { 'Content-Type': 'application/json' } });
 }
 
 export function installProjectAgentBridge() {
@@ -169,17 +177,20 @@ export function installProjectAgentBridge() {
 
       const operations = Array.isArray(data.operations) ? data.operations as KilnProjectOperation[] : [];
       const applied = applyProjectOperations(files, operations);
+      const sourceGame = applied.find((file) => file.path === 'game.js');
+      if (sourceGame) writeSourceGame(project.id, sourceGame.content);
+
       let finalFiles = applied;
       try {
         const runtime = buildRuntimeEntry(applied);
-        if (runtime) {
-          finalFiles = applied.map((file) => file.path === 'game.js' ? { ...file, content: runtime } : file);
-        }
+        if (runtime) finalFiles = applied.map((file) => file.path === 'game.js' ? { ...file, content: runtime } : file);
       } catch (error) {
         return new Response(JSON.stringify({ error: `Project runtime build failed: ${error instanceof Error ? error.message : String(error)}` }), { status: 422, headers: { 'Content-Type': 'application/json' } });
       }
+
       writeProjectFiles(project.id, finalFiles);
-      return compatibleResponse(data, data.summary || 'Updated the project.', operations, files, project.id);
+      const structuralChange = operations.some((operation) => operation.type !== 'update');
+      return compatibleResponse(data, data.summary || 'Updated the project.', operations, files, finalFiles, project.id, structuralChange);
     } catch (error) {
       return new Response(JSON.stringify({ error: error instanceof Error ? error.message : String(error) }), { status: 502, headers: { 'Content-Type': 'application/json' } });
     }
