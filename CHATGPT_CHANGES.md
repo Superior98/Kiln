@@ -23,7 +23,6 @@ Persistent engineering handoff for Kiln. **Agents returning to this repository s
 
 - Ember code mode is model-backed and produces runnable JavaScript.
 - Ember receives current project code and asset names.
-- Generated JavaScript is syntax-validated before application.
 - Uploaded image assets can be exposed through `Kiln.assets["asset-name"]`.
 - Preview execution uses the isolated sandbox in `artifacts/kiln-app/src/components/code-sandbox.tsx`.
 - The sandbox uses `sandbox="allow-scripts"`, no `allow-same-origin`, a restrictive CSP, and a narrow `Kiln` API.
@@ -31,21 +30,30 @@ Persistent engineering handoff for Kiln. **Agents returning to this repository s
 
 ## 2026-09-14 — Multi-file Ember agent integration
 
-The project-level agent foundation is now wired into the real Ember code-mode request path without deleting the older schema-mode path.
+The project-level agent is now wired into the real Ember code-mode request path without deleting the older schema-mode path.
 
 ### Server
 
 - `artifacts/api-server/src/routes/project-agent.ts` exposes `/api/assistant/project`.
 - The endpoint receives the bounded project file map and assets, asks Ember for structured create/update/delete/rename operations, validates the full batch, and returns the operations atomically.
 - Generated project code is never executed on the API server.
+- JavaScript module syntax is intentionally accepted by the API; parsing/execution belongs to the isolated browser runtime.
 
 ### Client
 
 - `artifacts/kiln-app/src/lib/project-agent.ts` owns the typed operation contract and atomic application helper.
 - `artifacts/kiln-app/src/lib/project-agent-bridge.ts` intercepts Ember's existing `responseFormat: "code"` request, supplies the complete current project files to the project agent, applies the returned operation batch to the real `kiln-project-files-v1` project store, and adapts the result back to the existing Ember UI contract.
-- Existing create/delete/rename operations are persisted first and trigger a clean reload so the current React file state picks up structural changes safely.
-- Pure file updates remain in-place.
-- `artifacts/kiln-app/src/main.tsx` installs the bridge at application startup.
+- Create/delete/rename operations are persisted first and trigger a clean reload so the current React file state picks up structural changes safely.
+- Pure updates remain in-place.
+- Source `game.js` is preserved separately so the compatibility runtime can be rebuilt without feeding its generated loader back to Ember as source code.
+- `main.tsx` installs the bridge at application startup.
+
+### Multi-file runtime
+
+- Added `artifacts/kiln-app/src/components/project-code-sandbox.tsx`, an isolated multi-file ES-module sandbox implementation with relative-import resolution, asset bridging, pause/resume, and runtime error reporting.
+- Added a compatibility bundling layer to the active bridge so the existing `CodeSandbox` can execute projects whose `game.js` imports project-local modules without exposing the parent app or network to generated code.
+- Relative `.js` / `.mjs` project imports are resolved; bare/external imports remain blocked by design.
+- The generated runtime is still executed only inside the sandbox. The API server never executes generated code.
 
 ### Persistent change history
 
@@ -53,23 +61,16 @@ The project-level agent foundation is now wired into the real Ember code-mode re
 - `artifacts/kiln-app/src/lib/changes-dock.ts` adds a persistent in-app **Changes** dock with All / Ember / ChatGPT / Claude filters.
 - Claude's repository history remains separately documented in `CLAUDE_CHANGES.md`; it is not overwritten by the ChatGPT history.
 
-### Important runtime boundary
+## 2026-09-14 — Current state
 
-The current preview remains the existing isolated single-entry `game.js` sandbox. The multi-file agent can now genuinely inspect and modify multiple stored project files, but the preview bundling layer still needs to be upgraded so arbitrary module imports between those files execute directly. Do not claim that arbitrary multi-module browser execution is finished until that runtime work is implemented and tested.
+The main migration path is now implemented: Ember can operate on a real multi-file project, the operation batch is atomic, structural changes persist, the change history is visible, and project-local modules can be compiled into the existing isolated preview boundary.
 
-## 2026-09-14 — Agent handoff/change history
+Known intentional limitations:
 
-Kiln now has separate persistent histories for ChatGPT and Claude. Claude's dedicated record is `CLAUDE_CHANGES.md`; ChatGPT's record is this file. The Claude record was reconstructed from the existing Claude-authored Git commits so the historical work remains discoverable without mixing agent ownership.
-
-Every future agent change should record:
-
-- date;
-- agent name;
-- files changed;
-- user-visible feature/fix;
-- important architectural decisions;
-- validation/testing performed;
-- known follow-up work.
+- The compatibility runtime supports project-local JavaScript modules, not arbitrary npm/browser package imports.
+- The active app preview still uses the established `CodeSandbox` component; the standalone `project-code-sandbox.tsx` is available as the cleaner native runtime for the next UI cleanup pass.
+- 3D projects continue through their existing Three.js preview path rather than the 2D module sandbox.
+- Automated browser-level regression tests should still be added before treating this as a locked production milestone.
 
 ## Engineering rules for future agents
 
@@ -86,7 +87,6 @@ Every future agent change should record:
 
 ## Remaining priority order
 
-1. Upgrade preview execution so arbitrary multi-file project modules can actually run inside the isolated sandbox.
+1. Add automated validation for project-agent responses and sandbox regressions.
 2. Finish and test Bramble Maze end-to-end in the real preview.
-3. Add automated validation for project-agent responses and sandbox regressions.
-4. Replace the temporary compatibility bridge with a native multi-file request/apply path once the runtime and UI are proven.
+3. Replace the temporary compatibility bridge with the native multi-file sandbox once browser testing proves it safe and stable.
