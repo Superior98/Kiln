@@ -90,7 +90,10 @@ export interface CodeSandboxProps {
    * "Play again" button after a win/lose outcome.
    */
   restartSignal?: number | string;
-  /** Pauses the iframe's internal render loop without unmounting it. */
+  /**
+   * Pauses the sandboxed game's actual render loop (via a kiln:pause
+   * postMessage the harness listens for), not just a visual dimming.
+   */
   running?: boolean;
   onReady?: () => void;
   onError?: (message: string, stack?: string) => void;
@@ -250,8 +253,26 @@ const HARNESS_TEMPLATE = `<!doctype html>
 
   var last = performance.now();
   var raf = null;
+  var paused = false;
+  var skipNextDt = false; // avoids a huge dt spike for the frame right after resuming
+  window.addEventListener("message", function (event) {
+    var data = event.data;
+    if (!data || typeof data.type !== "string") return;
+    if (data.type === "kiln:pause") {
+      paused = true;
+    } else if (data.type === "kiln:resume") {
+      paused = false;
+      skipNextDt = true;
+    }
+  });
   function tick(now) {
-    var dt = Math.min((now - last) / 1000, 0.05);
+    if (paused) {
+      last = now;
+      raf = requestAnimationFrame(tick);
+      return;
+    }
+    var dt = skipNextDt ? 0 : Math.min((now - last) / 1000, 0.05);
+    skipNextDt = false;
     last = now;
     if (frameCallback) {
       try {
@@ -438,6 +459,16 @@ export function CodeSandbox({
     // eslint-disable-next-line react-hooks/exhaustive-deps -- re-subscribing per iframeKey keeps this tied to the current iframe instance
   }, [iframeKey, onReady, onError, onWin, onLose, onScore, onLog]);
 
+  // Tell the harness to actually pause/resume its render loop, rather
+  // than just dimming the iframe visually. Sent on every change to
+  // `running` (including right after a remount, so a game that starts
+  // paused doesn't get a free frame of movement first).
+  useEffect(() => {
+    const frame = iframeRef.current;
+    if (!frame || !frame.contentWindow) return;
+    frame.contentWindow.postMessage({ type: running ? "kiln:resume" : "kiln:pause" }, "*");
+  }, [running, iframeKey]);
+
   if (srcDoc === null || iframeKey === null) {
     // Assets are still being resolved into data: URIs. This is normally
     // fast (blob: URL reads are local), but real remote URLs may take a
@@ -467,10 +498,9 @@ export function CodeSandbox({
       title="Kiln game sandbox"
       srcDoc={srcDoc}
       sandbox="allow-scripts"
-      // No `running` gate on mount: pausing is left to generated code
-      // reading a paused flag we don't yet expose here — see the
-      // follow-up wiring this into PreviewPane, which is a separate,
-      // reviewable change.
+      // Actual pausing happens via the kiln:pause/kiln:resume postMessage
+      // sent in the effect above; this opacity is just a visual cue on
+      // top of that, and also dims briefly while not yet ready.
       style={{
         width: "100%",
         height: "100%",
