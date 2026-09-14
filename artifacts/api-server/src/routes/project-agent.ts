@@ -2,7 +2,8 @@ import { Router, type IRouter } from "express";
 
 const router: IRouter = Router();
 const GROQ_ENDPOINT = "https://api.groq.com/openai/v1/chat/completions";
-const DEFAULT_MODEL = "openai/gpt-oss-20b";
+const DEFAULT_MODEL = process.env.EMBER_AGENT_MODEL || "openai/gpt-oss-120b";
+const DEFAULT_REASONING_EFFORT = process.env.EMBER_AGENT_REASONING_EFFORT || "high";
 const MAX_FILES = 32;
 const MAX_FILE_SIZE = 60_000;
 const MAX_PROJECT_CHARS = 500_000;
@@ -101,15 +102,17 @@ function buildAgentPrompt(projectName: string, projectType: string, files: Proje
     ? assets.filter((a): a is Record<string, unknown> => !!a && typeof a === "object" && typeof a.name === "string").map((a) => String(a.name).slice(0, 120)).slice(0, 50)
     : [];
   return [
-    "You are Ember, an autonomous game-project coding agent inside Kiln.",
+    "You are Ember, an expert autonomous game-project coding agent inside Kiln.",
     `Project: ${projectName} (${projectType}).`,
-    "You have the complete current project file map below. Make the user's requested change by returning a minimal set of real file operations.",
+    "Treat the current project as a real codebase, not a toy snippet. Inspect the complete file map, reason about dependencies and runtime behavior, then make the smallest complete set of changes required by the user.",
+    "Before editing, mentally plan the change, identify affected files, preserve existing behavior, and check for import/export and API consistency across the project.",
     "Return ONLY JSON: {\"summary\":\"...\",\"operations\":[{\"type\":\"create|update|delete|rename\",\"path\":\"...\",\"content\":\"...\"}]}.",
     "For create/update, return the COMPLETE file content. Never return diffs, patches, ellipses, or placeholders.",
     "Use relative project paths only. Never use .., absolute paths, shell commands, package installation, or secrets.",
-    "Preserve existing behavior unless the user explicitly asks to change it. Prefer editing existing files over unnecessary rewrites.",
-    "If a feature needs multiple files, actually create/update all required files. Keep the project internally consistent.",
+    "Preserve existing behavior unless the user explicitly asks to change it. Prefer focused edits over unnecessary rewrites.",
+    "If a feature needs multiple files, actually create/update all required files. Keep the project internally consistent and make sure imports point to real files and exported names exist.",
     "JavaScript runs in Kiln's isolated browser module runtime. ES modules with relative imports are supported. Bare/external imports are not supported unless Kiln explicitly provides them.",
+    "Use the available assets when appropriate and reference their exact names. Do not invent asset names.",
     `Available project assets: ${assetNames.length ? assetNames.map((name) => JSON.stringify(name)).join(", ") : "none"}`,
     `Current files:\n${projectText(files)}`,
     `User request: ${userPrompt.trim()}`,
@@ -136,7 +139,42 @@ router.post("/assistant/project", async (req, res) => {
     const upstream = await fetch(GROQ_ENDPOINT, {
       method: "POST",
       headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
-      body: JSON.stringify({ model, temperature: 0.2, max_tokens: 8192, messages: [{ role: "user", content: buildAgentPrompt(projectName, projectType, files, body.assets, body.prompt) }] }),
+      body: JSON.stringify({
+        model,
+        temperature: 0.2,
+        max_tokens: 16_384,
+        ...(model.startsWith("openai/gpt-oss-") ? { reasoning_effort: DEFAULT_REASONING_EFFORT } : {}),
+        response_format: {
+          type: "json_schema",
+          json_schema: {
+            name: "kiln_project_agent",
+            strict: true,
+            schema: {
+              type: "object",
+              additionalProperties: false,
+              properties: {
+                summary: { type: "string" },
+                operations: {
+                  type: "array",
+                  items: {
+                    type: "object",
+                    additionalProperties: false,
+                    properties: {
+                      type: { type: "string", enum: ["create", "update", "delete", "rename"] },
+                      path: { type: "string" },
+                      from: { type: ["string", "null"] },
+                      content: { type: ["string", "null"] },
+                    },
+                    required: ["type", "path", "from", "content"],
+                  },
+                },
+              },
+              required: ["summary", "operations"],
+            },
+          },
+        },
+        messages: [{ role: "user", content: buildAgentPrompt(projectName, projectType, files, body.assets, body.prompt) }],
+      }),
     });
     const data = await upstream.json() as { error?: { message?: string } | string; choices?: Array<{ message?: { content?: string | null } }> };
     if (!upstream.ok) {
@@ -145,11 +183,8 @@ router.post("/assistant/project", async (req, res) => {
     }
     const reply = data.choices?.[0]?.message?.content;
     if (typeof reply !== "string") { res.status(502).json({ error: "Ember returned an empty response." }); return; }
-    const clean = reply.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "").trim();
-    const start = clean.indexOf("{"); const end = clean.lastIndexOf("}");
-    if (start < 0 || end <= start) { res.status(502).json({ error: "Ember returned invalid project JSON." }); return; }
     let parsed: unknown;
-    try { parsed = JSON.parse(clean.slice(start, end + 1)); } catch { res.status(502).json({ error: "Ember returned malformed project JSON." }); return; }
+    try { parsed = JSON.parse(reply); } catch { res.status(502).json({ error: "Ember returned malformed project JSON." }); return; }
     const validated = validateOperations(parsed, files);
     if ("error" in validated) { res.status(422).json({ error: validated.error }); return; }
     res.json({ responseFormat: "project", ...validated, model });
