@@ -14,6 +14,7 @@ export const EMBER_PLANS = {
   premium_plus: { id: 'premium_plus', label: 'Premium+', model: 'qwen/qwen3.6-27b', modelLabel: 'Qwen3.6 27B', dailyRequests: 250 },
 } as const;
 
+export type EmberPlanId = keyof typeof EMBER_PLANS;
 type PaidPlan = 'premium' | 'premium_plus';
 type StripeObject = Record<string, unknown>;
 
@@ -24,7 +25,7 @@ function billingSecret(): string {
 }
 function signSession(sessionId: string): string { return createHmac('sha256', billingSecret()).update(sessionId).digest('hex'); }
 function makeCookieValue(sessionId: string): string { return `${sessionId}.${signSession(sessionId)}`; }
-function readSessionId(req: Request): string | null {
+export function readBillingSessionId(req: Request): string | null {
   const raw = typeof req.headers.cookie === 'string' ? req.headers.cookie : '';
   const match = raw.match(new RegExp(`(?:^|;\\s*)${COOKIE_NAME}=([^;]+)`));
   if (!match) return null;
@@ -35,9 +36,21 @@ function readSessionId(req: Request): string | null {
   try { if (!timingSafeEqual(Buffer.from(signature), Buffer.from(expected))) return null; } catch { return null; }
   return sessionId;
 }
-function setSessionCookie(res: Response, sessionId: string): void {
+export function ensureBillingSession(req: Request, res: Response): string {
+  const existing = readBillingSessionId(req);
+  if (existing) return existing;
+  const sessionId = randomUUID();
   const secure = process.env.NODE_ENV === 'production' ? '; Secure' : '';
   res.setHeader('Set-Cookie', `${COOKIE_NAME}=${encodeURIComponent(makeCookieValue(sessionId))}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${SESSION_TTL_SECONDS}${secure}`);
+  return sessionId;
+}
+export async function getEmberPlan(req: Request): Promise<EmberPlanId> {
+  const sessionId = readBillingSessionId(req);
+  if (!sessionId) return 'free';
+  const rows = await db.select({ plan: subscriptionsTable.plan, status: subscriptionsTable.status }).from(subscriptionsTable).where(eq(subscriptionsTable.userId, sessionId)).limit(1);
+  const row = rows[0];
+  if (!row || (row.status !== 'active' && row.status !== 'trialing')) return 'free';
+  return row.plan === 'premium_plus' ? 'premium_plus' : row.plan === 'premium' ? 'premium' : 'free';
 }
 function publicUrl(): string {
   const value = process.env.KILN_PUBLIC_URL;
@@ -74,9 +87,8 @@ async function upsertSubscription(input: { userId: string; customerId?: string |
 }
 
 router.get('/billing/plans', (_req, res) => { res.json({ plans: Object.values(EMBER_PLANS) }); });
-
 router.get('/billing/me', async (req, res) => {
-  const sessionId = readSessionId(req);
+  const sessionId = readBillingSessionId(req);
   if (!sessionId) { res.json({ plan: 'free', model: EMBER_PLANS.free.model, dailyRequests: EMBER_PLANS.free.dailyRequests }); return; }
   const rows = await db.select().from(subscriptionsTable).where(eq(subscriptionsTable.userId, sessionId)).limit(1);
   const subscription = rows[0];
@@ -84,23 +96,20 @@ router.get('/billing/me', async (req, res) => {
   const plan = paid && (subscription.plan === 'premium' || subscription.plan === 'premium_plus') ? subscription.plan : 'free';
   res.json({ plan, model: EMBER_PLANS[plan].model, dailyRequests: EMBER_PLANS[plan].dailyRequests, status: subscription?.status ?? 'inactive', currentPeriodEnd: subscription?.currentPeriodEnd ?? null });
 });
-
 router.post('/billing/checkout', async (req, res) => {
   const plan = req.body?.plan as PaidPlan;
   if (plan !== 'premium' && plan !== 'premium_plus') { res.status(400).json({ error: 'A paid plan is required.' }); return; }
   try {
-    const sessionId = readSessionId(req) ?? randomUUID();
+    const sessionId = ensureBillingSession(req, res);
     await ensureSessionSubscription(sessionId);
-    setSessionCookie(res, sessionId);
     const body = new URLSearchParams({ mode: 'subscription', success_url: `${publicUrl()}/?billing=success`, cancel_url: `${publicUrl()}/?billing=cancelled`, client_reference_id: sessionId, 'line_items[0][price]': priceIdFor(plan), 'line_items[0][quantity]': '1', 'subscription_data[metadata][kiln_plan]': plan, 'subscription_data[metadata][kiln_session_id]': sessionId, 'metadata[kiln_plan]': plan, 'metadata[kiln_session_id]': sessionId });
     const checkout = await stripeRequest('/checkout/sessions', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body });
     if (typeof checkout.url !== 'string') throw new Error('Stripe did not return a Checkout URL.');
     res.json({ url: checkout.url, plan });
   } catch (error) { res.status(503).json({ error: error instanceof Error ? error.message : 'Unable to start checkout.' }); }
 });
-
 router.post('/billing/portal', async (req, res) => {
-  const sessionId = readSessionId(req);
+  const sessionId = readBillingSessionId(req);
   if (!sessionId) { res.status(401).json({ error: 'No billing session found.' }); return; }
   try {
     const rows = await db.select().from(subscriptionsTable).where(eq(subscriptionsTable.userId, sessionId)).limit(1);
@@ -111,7 +120,6 @@ router.post('/billing/portal', async (req, res) => {
     res.json({ url: portal.url });
   } catch (error) { res.status(503).json({ error: error instanceof Error ? error.message : 'Unable to open billing portal.' }); }
 });
-
 router.post('/billing/webhook', async (req, res) => {
   const signature = typeof req.headers['stripe-signature'] === 'string' ? req.headers['stripe-signature'] : '';
   const secret = process.env.STRIPE_WEBHOOK_SECRET;
