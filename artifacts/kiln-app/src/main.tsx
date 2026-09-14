@@ -2,6 +2,7 @@ import { createRoot } from 'react-dom/client';
 
 import App from './App';
 import { ErrorBoundary } from '@/components/error-boundary';
+import './lib/project-agent-bridge';
 
 import './index.css';
 import './kiln-responsive.css';
