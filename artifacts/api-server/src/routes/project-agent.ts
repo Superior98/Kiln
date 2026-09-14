@@ -13,18 +13,13 @@ type AgentOperation =
   | { type: "create" | "update"; path: string; content: string }
   | { type: "delete"; path: string }
   | { type: "rename"; from: string; path: string };
-
 type AgentResult = { summary: string; operations: AgentOperation[] };
 
-function checkJavaScriptSyntax(code: string): string | null {
-  try {
-    // Parse only. Generated code is never executed on the server.
-    // eslint-disable-next-line no-new-func
-    new Function(code);
-    return null;
-  } catch (error) {
-    return error instanceof Error ? error.message : String(error);
-  }
+function checkJavaScriptSyntax(_code: string): string | null {
+  // ES modules legitimately contain import/export declarations. Generated
+  // code is never executed on the server; the isolated browser runtime is
+  // the authoritative parser/runtime for JavaScript.
+  return null;
 }
 
 function safePath(path: string): boolean {
@@ -37,7 +32,6 @@ function validateOperations(raw: unknown, existing: ProjectFile[]): AgentResult 
   const rawOperations = value.operations;
   if (!Array.isArray(rawOperations)) return { error: "Ember did not return project operations." };
   if (rawOperations.length > MAX_FILES) return { error: `Ember returned too many operations (max ${MAX_FILES}).` };
-
   const known = new Set(existing.map((file) => file.path));
   const operations: AgentOperation[] = [];
 
@@ -115,7 +109,7 @@ function buildAgentPrompt(projectName: string, projectType: string, files: Proje
     "Use relative project paths only. Never use .., absolute paths, shell commands, package installation, or secrets.",
     "Preserve existing behavior unless the user explicitly asks to change it. Prefer editing existing files over unnecessary rewrites.",
     "If a feature needs multiple files, actually create/update all required files. Keep the project internally consistent.",
-    "JavaScript must be standalone browser JavaScript unless the existing project clearly uses modules. JSON must remain valid JSON.",
+    "JavaScript runs in Kiln's isolated browser module runtime. ES modules with relative imports are supported. Bare/external imports are not supported unless Kiln explicitly provides them.",
     `Available project assets: ${assetNames.length ? assetNames.map((name) => JSON.stringify(name)).join(", ") : "none"}`,
     `Current files:\n${projectText(files)}`,
     `User request: ${userPrompt.trim()}`,
@@ -123,29 +117,15 @@ function buildAgentPrompt(projectName: string, projectType: string, files: Proje
 }
 
 router.post("/assistant/project", async (req, res) => {
-  const body = req.body as {
-    prompt?: unknown;
-    project?: { name?: unknown; type?: unknown };
-    files?: unknown;
-    assets?: unknown;
-    model?: unknown;
-  };
-  if (typeof body.prompt !== "string" || !body.prompt.trim()) {
-    res.status(400).json({ error: "A non-empty prompt is required." });
-    return;
-  }
+  const body = req.body as { prompt?: unknown; project?: { name?: unknown; type?: unknown }; files?: unknown; assets?: unknown; model?: unknown };
+  if (typeof body.prompt !== "string" || !body.prompt.trim()) { res.status(400).json({ error: "A non-empty prompt is required." }); return; }
   const apiKey = process.env.GROQ_API_KEY;
-  if (!apiKey) {
-    res.status(503).json({ error: "Groq is not configured on the server." });
-    return;
-  }
+  if (!apiKey) { res.status(503).json({ error: "Groq is not configured on the server." }); return; }
   const files: ProjectFile[] = Array.isArray(body.files)
     ? body.files.flatMap((item) => {
         if (!item || typeof item !== "object") return [];
         const value = item as Record<string, unknown>;
-        return typeof value.path === "string" && typeof value.content === "string"
-          ? [{ path: value.path, content: value.content }]
-          : [];
+        return typeof value.path === "string" && typeof value.content === "string" ? [{ path: value.path, content: value.content }] : [];
       }).slice(0, MAX_FILES)
     : [];
   const projectName = typeof body.project?.name === "string" ? body.project.name.slice(0, 100) : "Untitled Game";
@@ -156,38 +136,22 @@ router.post("/assistant/project", async (req, res) => {
     const upstream = await fetch(GROQ_ENDPOINT, {
       method: "POST",
       headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
-      body: JSON.stringify({
-        model,
-        temperature: 0.2,
-        max_tokens: 8192,
-        messages: [{ role: "user", content: buildAgentPrompt(projectName, projectType, files, body.assets, body.prompt) }],
-      }),
+      body: JSON.stringify({ model, temperature: 0.2, max_tokens: 8192, messages: [{ role: "user", content: buildAgentPrompt(projectName, projectType, files, body.assets, body.prompt) }] }),
     });
     const data = await upstream.json() as { error?: { message?: string } | string; choices?: Array<{ message?: { content?: string | null } }> };
     if (!upstream.ok) {
       const message = typeof data.error === "string" ? data.error : data.error?.message || `Groq returned ${upstream.status}`;
-      res.status(502).json({ error: message });
-      return;
+      res.status(502).json({ error: message }); return;
     }
     const reply = data.choices?.[0]?.message?.content;
-    if (typeof reply !== "string") {
-      res.status(502).json({ error: "Ember returned an empty response." });
-      return;
-    }
+    if (typeof reply !== "string") { res.status(502).json({ error: "Ember returned an empty response." }); return; }
     const clean = reply.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "").trim();
-    const start = clean.indexOf("{");
-    const end = clean.lastIndexOf("}");
-    if (start < 0 || end <= start) {
-      res.status(502).json({ error: "Ember returned invalid project JSON." });
-      return;
-    }
+    const start = clean.indexOf("{"); const end = clean.lastIndexOf("}");
+    if (start < 0 || end <= start) { res.status(502).json({ error: "Ember returned invalid project JSON." }); return; }
     let parsed: unknown;
     try { parsed = JSON.parse(clean.slice(start, end + 1)); } catch { res.status(502).json({ error: "Ember returned malformed project JSON." }); return; }
     const validated = validateOperations(parsed, files);
-    if ("error" in validated) {
-      res.status(422).json({ error: validated.error });
-      return;
-    }
+    if ("error" in validated) { res.status(422).json({ error: validated.error }); return; }
     res.json({ responseFormat: "project", ...validated, model });
   } catch (error) {
     req.log.error({ err: error }, "Project agent request failed");
