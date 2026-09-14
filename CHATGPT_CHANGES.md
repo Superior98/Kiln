@@ -35,21 +35,9 @@ Persistent engineering handoff for Kiln. **Agents returning to this repository s
 
 Added `artifacts/api-server/src/routes/project-agent.ts` and registered it from `routes/index.ts`.
 
-The new `/api/assistant/project` endpoint is a real project-level coding-agent contract. It can:
+The new `/api/assistant/project` endpoint is a real project-level coding-agent contract. It can inspect a bounded project file map and create, update, delete, and rename real files. It validates JavaScript and JSON, rejects unsafe paths, enforces size/count limits, and returns a structured operation list suitable for atomic client-side application.
 
-- inspect a bounded project file map;
-- reason about changes across multiple files;
-- create files;
-- update complete files;
-- delete files;
-- rename files;
-- validate JavaScript syntax without executing generated code;
-- validate JSON files;
-- reject absolute paths and traversal attempts;
-- enforce file/count/project-size limits;
-- return a structured operation list suitable for atomic client-side application.
-
-This is intentionally separate from the legacy one-file `/api/assistant` code mode so existing projects do not break while the client migrates to the project-agent contract.
+Also added `artifacts/kiln-app/src/lib/project-agent.ts`, which contains the client contract and all-or-nothing operation application helper.
 
 ### Migration still required
 
@@ -61,7 +49,7 @@ The preview layer must then evolve from the current single-inline-script assumpt
 
 ## 2026-09-14 — Agent handoff/change history
 
-Kiln should maintain persistent change history for each coding agent. ChatGPT's history lives here. Claude's history should remain separately identifiable rather than overwriting this record.
+Kiln now has separate persistent histories for ChatGPT and Claude. Claude's dedicated record is `CLAUDE_CHANGES.md`; ChatGPT's record is this file. The Claude record was reconstructed from the existing Claude-authored Git commits so the historical work remains discoverable without mixing agent ownership.
 
 Every future agent change should record:
 
@@ -72,8 +60,6 @@ Every future agent change should record:
 - important architectural decisions;
 - validation/testing performed;
 - known follow-up work.
-
-The goal is that Claude, ChatGPT, or another coding agent can return later and understand **what changed and why**, rather than reconstructing the project from conversation history.
 
 ## Engineering rules for future agents
 
