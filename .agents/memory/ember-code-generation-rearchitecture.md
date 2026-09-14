@@ -71,9 +71,6 @@ app and see it work would be high-risk.
    still schema-only.
 
 **Known, deliberate limitations to fix later, not block on:**
-- The preview's play/pause button only dims the sandboxed iframe visually;
-  it doesn't truly pause execution. A real pause needs a parent-to-iframe
-  message channel (CodeSandbox currently only listens, never sends).
 - Code mode is 2D-only. 3D would need a separate Three.js-aware harness.
 - Only images are bridged into the sandbox (`Kiln.assets`). Audio assets
   exist in AssetsPane but have no `Kiln.playSound`-type equivalent yet.
@@ -92,6 +89,10 @@ app and see it work would be high-risk.
 - `@`-mention autocomplete for referencing asset names in the chat prompt
   (client-side typing convenience only; Ember already gets full asset
   names regardless of prompt wording) - see "Add @-mention autocomplete...".
+- Real pause/resume: CodeSandbox now posts kiln:pause/kiln:resume into the
+  iframe (previously it only ever listened for messages coming out), and
+  the harness actually stops calling onFrame while paused instead of just
+  being dimmed visually - see "Add real pause/resume...".
 
 **How to apply:** Don't skip straight to phase 2/3 without the harness from phase 1
 in place and tested — it's the isolation boundary everything else assumes exists.
