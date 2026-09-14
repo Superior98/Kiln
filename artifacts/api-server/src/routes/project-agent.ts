@@ -6,7 +6,7 @@ const DEFAULT_MODEL = "openai/gpt-oss-20b";
 const MAX_FILES = 32;
 const MAX_FILE_SIZE = 60_000;
 const MAX_PROJECT_CHARS = 500_000;
-const SAFE_PATH = /^(?!.*(?:^|\/)\.\.(?:\/|$))(?!\/)(?![A-Za-z]:[\\/])[^\\0]+$/;
+const SAFE_PATH = /^(?!.*(?:^|\/)\.\.(?:\/|$))(?!\/)(?![A-Za-z]:[\\/])[^\u0000]+$/;
 
 type ProjectFile = { path: string; content: string };
 type AgentOperation =
